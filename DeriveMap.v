@@ -1,6 +1,9 @@
-From elpi Require Import elpi.
-
 (**************************************************************************)
+(* This version only works for inductives which have exactly one parameter, 
+   which moreover has to be *uniform*. *)
+(**************************************************************************)
+
+From elpi Require Import elpi.
 
 Elpi Command DeriveMap.
 Elpi Accumulate lp:{{

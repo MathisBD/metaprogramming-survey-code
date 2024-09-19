@@ -1,5 +1,5 @@
 (**************************************************************************)
-(* Same as DeriveMap but more powerful. Still only one parameter though. *)
+(* This version deals with multiple parameters. *)
 (**************************************************************************)
 
 From elpi Require Import elpi.
