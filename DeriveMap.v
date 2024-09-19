@@ -17,7 +17,7 @@ main [str IndName] :- std.do! [
     (coq.env.indt-decl Ind (parameter _ _ ParamTy _\ inductive _ tt _ _))
     "This command only supports inductive types with exactly one parameter.",
   % Build the map function.
-  pi a\ do-map Ind ParamTy F,
+  do-map Ind ParamTy F,
   % Add the function to the Coq global environment.
   Name is IndName ^ "_map",
   coq.ensure-fresh-global-id Name FName,

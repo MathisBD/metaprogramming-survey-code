@@ -72,7 +72,7 @@ main [str IndName] :- std.do! [
   % Check the parameter is a type.
   std.assert! (ParamTy = sort _) "The inductive parameter's type should be a sort.",
   % Build the map function.
-  pi a\ build-map Ind ParamTy F,
+  build-map Ind ParamTy F,
   coq.say { coq.term->string F },
   std.assert-ok! (coq.typecheck F _) "Resulting function does not typecheck! Aborting.",
   % Add the function to the Coq global environment.
@@ -157,6 +157,7 @@ build-branch I Map A B F CA _ Args ArgsTy Branch :- std.do! [
 
 build-branch.aux A B F Arg ArgTy NewArg :-
   (copy A B => copy ArgTy NewArgTy),
+  coq.say "A =" A ", B =" B ", F =" F ", ArgTy =" ArgTy ", NewArgTy =" NewArgTy,
   lift-mapping A B F ArgTy NewArgTy FArg, 
   !, 
   coq.mk-app FArg [Arg] NewArg.
