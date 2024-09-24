@@ -1,0 +1,10 @@
+-generate-meta-for-package derivemap-plugin
+-R theories DeriveMap.OCaml
+-I src
+
+theories
+
+src/derivemap.ml
+src/derivemap.mli
+src/g_derivemap.mlg
+src/derivemap_plugin.mlpack

@@ -1,3 +1,7 @@
+# Description 
+
+This project contains several example tactics and commands written in Elpi, Ltac2, MetaCoq and Ocaml.
+
 # Setup
 
 Setup a local opam switch with coq :
@@ -10,5 +14,5 @@ opam pin add coq 8.19.2
 Install elpi :
 ```
 opam repo add coq-released https://coq.inria.fr/opam/released
-opem install coq-elpi
+opam install coq-elpi
 ```

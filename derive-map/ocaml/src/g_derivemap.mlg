@@ -1,0 +1,11 @@
+DECLARE PLUGIN "derivemap-plugin.plugin"
+
+{ 
+  (*open Derivemap*)
+  open Stdarg
+}
+
+(* Declare the "DeriveMap" Coq command. *)
+VERNAC COMMAND EXTEND DeriveMap CLASSIFIED AS SIDEFF
+| [ "DeriveMap" ref(ind) ] -> { Derivemap.derive ind }
+END
