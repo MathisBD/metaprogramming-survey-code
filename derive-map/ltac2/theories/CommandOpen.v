@@ -1,5 +1,4 @@
-(* New version which does NOT manipulate open terms 
-   (or at least not more than necessary). *)
+(* Old version (broken now) that manipulates open terms. *)
 
 From Ltac2 Require Import Ltac2 Printf.
 From Coq Require List.
@@ -60,10 +59,6 @@ Ltac2 rec sequence (xs : 'a option list) : 'a list option :=
 
 End OptionUtils.
 
-(* Throw a fatal [Tactic_failure] exception with the given message. *)
-Ltac2 tactic_fail (msg : string) : 'a :=
-  Control.throw (Tactic_failure (Some (Message.of_string msg))).
-
 (* Lift all free variables by a given amount. *)
 Ltac2 lift (n : int) (t : constr) : constr := Constr.Unsafe.liftn n 0 t.
 
@@ -73,10 +68,6 @@ Ltac2 lift1 (t : constr) : constr := Constr.Unsafe.liftn 1 0 t.
 (* Smart constructor for [Constr.Unsafe.Rel]. *)
 Ltac2 mk_rel (n : int) : constr :=
   Constr.Unsafe.make (Constr.Unsafe.Rel n).
-
-(* Smart constructor for [Constr.Unsafe.Var]. *)
-Ltac2 mk_var (i : ident) : constr :=
-  Constr.Unsafe.make (Constr.Unsafe.Var i).
 
 (* Smart constructor for [Constr.Unsafe.Lambda]. *)
 Ltac2 mk_lambda (bind : binder) (body : constr) : constr := 
@@ -110,7 +101,6 @@ Ltac2 mk_fix (struct_arg_idx : int) (binder : binder) (body : constr) : constr :
   Constr.Unsafe.make (Constr.Unsafe.Fix [| struct_arg_idx |] 0 [| binder |] [| body |]).
 
 (* Unify two terms t1 and t2 *when no goal is focussed*. 
-   It only works if t1 and t2 are closed terms (contain no free de Bruijn index).
    Returns a boolean indicating whether unification succeeded. 
 
    For some reason Ltac2 unification requires that some goal be focussed :
@@ -123,7 +113,7 @@ Ltac2 unify_ (t : constr) (u : constr) : bool :=
   let g := 
     match Constr.Unsafe.kind '_ with 
     | Constr.Unsafe.Evar ev _ => ev 
-    | _ => tactic_fail "unify_"
+    | _ => Control.throw Assertion_failure
     end 
   in 
   (* Focus an arbitrary goal. *)
@@ -133,6 +123,22 @@ Ltac2 unify_ (t : constr) (u : constr) : bool :=
     Control.plus 
       (fun () => Unification.unify_with_current_ts t u ; true))
       (fun exn => match exn with Internal _ => false | _ => Control.zero exn end).  
+
+(* Check if [x] occurs in [t]. For now we only handle the case where [x] is a de Bruijn index. *)
+Ltac2 occurs (x : constr) (t : constr) : bool := 
+  match Constr.Unsafe.kind x with 
+  | Constr.Unsafe.Rel n => 
+    (* For some reason the behaviour of [occurn] is the opposite of what it should be. *)
+    (* See also https://github.com/coq/coq/issues/19602 *)
+    Bool.neg (Constr.Unsafe.occurn n t)
+  | _ =>
+    let msg := Message.of_string "occurs" in 
+    Control.throw (Invalid_argument (Some msg))  
+  end.
+
+(* Copy [t] with [a] replaced by [b]. *)
+Ltac2 rec copy_with (a : constr) (b : constr) (t : constr) : constr := 
+  if Constr.equal a t then b else Constr.Unsafe.map (copy_with a b) t.
 
 (**************************************************************************************)
 
@@ -146,45 +152,58 @@ Ltac2 decode_name (name : string) : ident list option :=
   let parts := StringUtils.split_on_char dot_char name in
   (* We take care that some identifiers might be invalid. *)
   OptionUtils.sequence (List.map Ident.of_string parts).
+  
+(* [decomp_prod T] returns the argument types and return type of T.
+   If T is of the form [forall x1 : A1, forall x2 : A2, ... forall xn : An, R],
+   the arguments are [A1; ..., An] and the return type is R (which is not itself a product). *)
+Ltac2 decomp_prod (ty : constr) : constr array * constr := 
+  let rec loop acc ty := 
+    match Constr.Unsafe.kind ty with 
+    | Constr.Unsafe.Prod binder ret => loop (Constr.Binder.type binder :: acc) ret
+    | _ => List.rev acc, ty
+    end
+  in 
+  let (args, ret) := loop [] ty in
+  Array.of_list args, ret.
+
 
 (* This module implements rules to lift mappings, and a small algebra of 
    combinators to manipulate these rules. *)
 Module LiftRule.
 
-(* A lifting rule lifts a function [f : a -> b] to a function [f' : t a -> t b].
-   
-   Formally we view a lifting rule as a (partial) mapping from a type former [T : Type -> Type]
-   to a function [F : forall A B, (A -> B) -> T A -> T B]. Both [T] and [F] are closed terms.
-*)
-Ltac2 Type t := constr (* T *) -> constr option (* F *).
- 
+(* A lifting rule [rule a b fab t u] lifts the function [f : a -> b] to a function [ftu : t -> u].
+   It is expected that [u] is equal to [t] with [a] replaced by [b]. *)
+Ltac2 Type t := constr -> constr -> constr -> constr -> constr -> constr option.
+
 (* A base rule which always fails. *)
-Ltac2 fail : t := fun _ => None.
+Ltac2 fail : t :=
+  fun _a _b _fab _t _u => None.
 
 (* A rule which handles the cases where there is no lifting to be done. *)
 Ltac2 base_apply : t :=
-  fun t =>
+  fun a b fab t u =>
     printf "RULE APPLY" ;
-    lazy_match! t with 
-    | fun (A : Type) => A => Some '(fun A B f => f)
-    | _ => None 
-    end.
+    if Bool.and (Constr.equal a t) (Constr.equal b u) 
+    then Some fab
+    else None.
 
 (* A rule which handles the cases where [t] does not contain [a] (and thus [u] does not contain [b]). *)
 Ltac2 base_id : t :=
-  fun t =>
+  fun a _b _fab t _u =>
     printf "RULE ID" ;
-    lazy_match! t with 
-    | fun (A : Type) => _ => Some '(fun A B f (x : $t A) => x)
-    | _ => None
-    end.
+    if Bool.neg (occurs a t)
+    then 
+      (* We return the identity on type [t], which has type [t -> u] since in this case [u] is equal to [t]. *)
+      let id_t := mk_lambda (Constr.Binder.unsafe_make None Constr.Binder.Relevant t) (mk_rel 1) in
+      Some id_t
+    else None.
 
 (* [or r1 r2] tries [r1] and if it fails applies [r2]. *)
 Ltac2 or (r1 : t) (r2 : t) : t :=
-  fun t => 
-    match r1 t with 
-    | Some f => Some f
-    | None => r2 t
+  fun a b fab t u => 
+    match r1 a b fab t u with 
+    | Some ftu => Some ftu
+    | None => r2 a b fab t u
     end.
 
 (* [any rs] tries the rules in [rs] in order from first to last and returns the first success. *)
@@ -194,20 +213,44 @@ Ltac2 any (rs : t list) : t :=
   | r :: rs => List.fold_left or r rs
   end.
 
+Ltac2 abstract (x : constr) (ty : constr) (body : constr) : constr :=
+  mk_lambda 
+    (Constr.Binder.unsafe_make None Constr.Binder.Relevant ty) 
+    (copy_with x (mk_rel 1) body).
+
+(* [beta_root t] check if [t] contains a beta redex at its root :
+   - if yes it contracts it.
+   - otherwise it returns [t] unchanged. 
+   It lifts the argument of the redex as needed. *)
+Ltac2 beta_root (t : constr) : constr :=
+  match Constr.Unsafe.kind t with 
+  | Constr.Unsafe.App f args =>
+    match Constr.Unsafe.kind f with 
+    | Constr.Unsafe.Lambda _ body => 
+       let remaining_args := Array.sub args 1 (Int.sub (Array.length args) 1) in
+       mk_apps (Constr.Unsafe.substnl [Array.get args 0] 0 body) remaining_args
+    | _ => t
+    end
+  | _ => t 
+  end.
+
 (* An example rule for lists. *)
 Ltac2 list_rule (rec_rule : t) : t := 
-  fun t =>
+  fun a b fab t _u =>
     printf "RULE LIST" ;
-    (* Check [t] is of the right form. *)
-    lazy_match! t with 
-    | fun (A : Type) => list (?u A) => 
-      (* Recurse with [u]. *)
-      match rec_rule u with 
-      | Some fu => Some '(fun A B f => @List.map ($u A) ($u B) ($fu A B f))
-      | None => None
-      end 
-    | _ => None 
-    end.
+    let alpha := '(_ : Type -> Type) in
+    let t' := abstract a 'Type t in 
+    let pat := '(fun a => list ($alpha a)) in
+    if unify_ t' pat  then
+      printf "SUCCESS !" ;
+      let x := beta_root (mk_app alpha a) in 
+      let y := beta_root (mk_app alpha b) in
+      printf "Recursing with a=%t b=%t fab=%t x=%t y=%t" a b fab x y ;
+      match rec_rule a b fab x y with
+      | None => None 
+      | Some f => Some (mk_apps '(List.map) [| mk_app alpha a ; mk_app alpha b ; f |])
+      end
+    else None.
 
 (* Fixpoint operation on lift rules. 
    Since Ltac2 uses an eager evaluation strategy, I have to explicitly eta-expand the 
@@ -215,53 +258,16 @@ Ltac2 list_rule (rec_rule : t) : t :=
    why I use this function instead of Ltac2's let-rec statement : so that [fix_] handles 
    the eta-expansion and the code that uses [fix_] can forget about these details. *)
 Ltac2 rec fix_ (f : t -> t) : t := 
-  fun t => f (fix_ f) t.
+  fun a b fab t u => f (fix_ f) a b fab t u.
 
 End LiftRule.
 
-(* [constructor_args ctr] returns the types of the arguments of [ctr].
-   This assumes the corresponding inductive has exactly one uniform parameter,
-   and returns the argument types of [ctr] as a function of this parameter. 
-   
-   This function performs a bit of term surgery.
-*)
-Ltac2 constructor_arg_types (ctr : constructor) : constr list := 
-  (* Get the type of the constructor. *)
-  let cty := Constr.type (Env.instantiate (Std.ConstructRef ctr)) in
-  (* Peel off the first argument type. *)
-  match Constr.Unsafe.kind cty with 
-  | Constr.Unsafe.Prod binder_a cty => 
-    (* Collect the remaining argument types while abstracting over the first one. *)
-    let rec loop i acc cty :=
-      match Constr.Unsafe.kind cty with 
-      | Constr.Unsafe.Prod binder cty => 
-        (* Get the argument type. *)
-        let arg_ty := Constr.Binder.type binder in
-        (* Check the argument type does not depend on any previous argument 
-           (apart from the first one which is the inductive parameter). 
-           For some reason Constr.Unsafe.occur_between has its meaning reversed :
-           see https://github.com/coq/coq/issues/19602 
-           If this is fixed in the future, remove [Bool.neg] in the test below. *)
-        if Bool.neg (Constr.Unsafe.occur_between 1 i arg_ty) then 
-          tactic_fail "constructor_arg_types : dependent argument"
-        else 
-          (* Abstract over the inductive parameter. *)
-          let arg_ty := mk_lambda binder_a (Constr.Unsafe.substnl [mk_rel 1] i arg_ty) in
-          (* Recurse to gather the remaining arguments. *)
-          loop (Int.add i 1) (arg_ty :: acc) cty
-      | _ => List.rev acc 
-      end
-    in 
-    loop 0 [] cty
-  | _ => tactic_fail "constructor_arg_types : constructor type is not a product"
-  end.
-
 (* Lift a mapping [f : a -> b] to operate on the argument [arg] of type [t].
    The parameter [map] is the fixpoint parameter of type [forall A B, (A -> B) -> I A -> I B]. *)
-(*Ltac2 rec build_arg (ind : inductive) map a b f (arg : constr) (t : constr) : constr :=
+Ltac2 rec build_arg (ind : inductive) map a b f (arg : constr) (t : constr) : constr :=
   (* Replace [a] with [b] in [arg_ty]. *)
   let u := copy_with a b t in
-  printf "BUILD_ARG a=%t  b=%t  t=%t  u=%t" a b t u ; 
+  printf "BUILD_ARGS a=%t  b=%t  t=%t  u=%t" a b t u ; 
   (* Custom rule to lift from [a -> b] to [i a -> i b] using [map]. *)
   let map_rule a b fab t u :=
     printf "RULE MAP" ;
@@ -284,49 +290,19 @@ Ltac2 constructor_arg_types (ctr : constructor) : constr list :=
   match rule a b f t u with 
   | None => Control.throw (Tactic_failure (Some (Message.of_constr t)))
   | Some ftu => mk_app ftu arg
-  end.*)
+  end.
 
-Ltac2 string_of_int (i : int) : string := Message.to_string (Message.of_int i).
-
-(* The resulting branch abstracts over [A], [B] and [f]. *)
-Ltac2 build_branch (ctr : constructor) : constr :=
+Ltac2 build_branch (ind : inductive) map a b f (ctr : constructor) : constr :=
   (* Get the argument types of the constructor. *)
-  let arg_tys := constructor_arg_types ctr in 
-  let n := List.length arg_tys in
-  (* Create [n] variables for the arguments. *)
-  let args := List.init n (fun i => 
-    let name := String.app "x" (string_of_int i) in 
-    Option.get (Ident.of_string name)) 
-  in 
-  printf "ARGS" ; List.iter (printf ">> %I") args ;
-  (* Variables for A, B and f. *)
-  let a := @A in 
-  let b := @B in 
-  let f := @f in 
-  (* Apply the constructor to the (mapped) argument. *)
-  let cb := mk_app (Env.instantiate (Std.ConstructRef ctr)) (mk_var b) in
-  let tmp := List.fold_left2 (fun acc x _ty => mk_app acc (mk_var x)) cb args arg_tys in
-  printf "TMP = %t" tmp ;
-  (* Abstract over the arguments. *)
-  let res := Constr.Unsafe.closenl (a :: b :: f :: args) 1 tmp in
-  printf "RES = %t" res ;
-  (* Add the binders. *)
-  (* TODO. *)
-  List.fold_left2 
-    (fun res x ty => mk_lambda (Constr.Binder.make (Some x) ))
-    res
-    (a :: b :: f :: args)
-    ('Type :: 'Type :: 'Type :: arg_tys ).
-
-  (*(* Build the *)
-  let rec loop res arg_tys :=
-    match arg_tys with 
-    | ty :: arg_tys => 
-      let body := loop arg_tys in
-      mk_lambda (Constr.Binder.make )
-      '(fun (x : $ty) => $body x)
-
-  (* Build the arguments for the resulting application. *)
+  let c := Env.instantiate (Std.ConstructRef ctr) in
+  let (arg_tys, _) := decomp_prod (Constr.type c) in 
+  (* Remove the first argument (which is the uniform parameter).
+     [n] is the number of remaining arguments. *)
+  let n := Int.sub (Array.length arg_tys) 1 in
+  let arg_tys := Array.sub arg_tys 1 n in
+  (* Substitute [a]. After this step each arg_ty_i is at depth [i]. *)
+  let arg_tys := Array.mapi (fun i => Constr.Unsafe.substnl [a] i) arg_tys in
+  (* Build the arguments for the resulting application, at depth [n]. *)
   let args := 
     Array.init n (fun i => 
       let arg := mk_rel (Int.sub n i) in
@@ -341,12 +317,12 @@ Ltac2 build_branch (ctr : constructor) : constr :=
     arg_tys
     (mk_apps (mk_app c (lift n b)) args)  
   in 
-  branch.*)
+  branch.
 
 Ltac2 build_map (ind : inductive) : constr := 
   let i := Env.instantiate (Std.IndRef ind) in
   (* Bind the variables. *)
-  let _map := mk_rel 5 in
+  let map := mk_rel 5 in
   let a := mk_rel 4 in
   let b := mk_rel 3 in
   let f := mk_rel 2 in
@@ -355,7 +331,7 @@ Ltac2 build_map (ind : inductive) : constr :=
   let ind_data := Ind.data ind in
   let constructors := Array.init (Ind.nconstructors ind_data) (Ind.get_constructor ind_data) in
   (* If we could quote open terms : '(fun _ => $i $b). *)
-  let match_ret :=
+  let match_ret := 
     mk_lambda 
       (Constr.Binder.unsafe_make None Constr.Binder.Relevant (mk_app i a)) 
       (mk_app i (lift1 b)) 
@@ -367,7 +343,7 @@ Ltac2 build_map (ind : inductive) : constr :=
       (match_ret, Constr.Binder.Relevant) 
       Constr.Unsafe.NoInvert   
       x 
-      (Array.map (fun ctr => mk_apps (build_branch ctr) [| a ; b ; f |]) constructors))
+      (Array.map (build_branch ind map a b f) constructors))
   in
   (* Generate the final function. *)
   '(fix map (A B : Type) (f : A -> B) (x : $i A) : $i B := $body).
@@ -375,15 +351,19 @@ Ltac2 build_map (ind : inductive) : constr :=
 (* DeriveMap command entry point. It takes as input the name of an inductive 
    and returns the corresponding mapping function. *)
 Ltac2 derive_map (ind_name : string) : constr := 
+  (* Error handling. *)
+  let fail msg :=
+    Control.throw (Tactic_failure (Some (Message.of_string msg)))
+  in
   (* Find the inductive in the environment. *)
   let ind := 
     match decode_name ind_name with 
-    | None => tactic_fail "Invalid identifier !"
+    | None => fail "Invalid identifier !"
     | Some ids => 
       match Env.expand ids with 
-      | [] => tactic_fail "Unknown reference !"
+      | [] => fail "Unknown reference !"
       | Std.IndRef ind :: _ => ind
-      | _ :: _ => tactic_fail "Not an inductive !"
+      | _ :: _ => fail "Not an inductive !"
       end
     end
   in 
@@ -391,7 +371,7 @@ Ltac2 derive_map (ind_name : string) : constr :=
   (* Check the inductive has exactly one parameter of type [Type]. *)
   lazy_match! Constr.type i with 
   | Type -> _ => ()
-  | _ => tactic_fail "Inductive should have exactly one parameter of type [Type]"
+  | _ => fail "Inductive should have exactly one parameter of type [Type]"
   end ;
   (* Build the mapping function. *)
   let f := build_map ind in
@@ -400,16 +380,15 @@ Ltac2 derive_map (ind_name : string) : constr :=
   let f := 
     match Constr.Unsafe.check f with 
     | Val f => f
-    | Err _ => tactic_fail "Resulting function does not typecheck"
+    | Err _ => fail "Resulting function does not typecheck"
     end
   in f.
 
 (***********************************************************************************)
 (* Testing. *)
 
-
 Inductive trivial (A : Type) : Type := 
-  | T1 : bool -> A -> nat -> trivial A.
+  | T1 : list A -> trivial A.
 
 Ltac2 Eval derive_map "trivial".
 
