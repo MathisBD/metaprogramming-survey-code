@@ -1,0 +1,7 @@
+; Set some flags globally. 
+; Coq requires -rectypes.
+
+(env
+ (dev
+  (flags
+   (:standard -warn-error +A -w -32-27 -rectypes))))

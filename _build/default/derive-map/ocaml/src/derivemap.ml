@@ -12,8 +12,8 @@ end
 let evd : Evd.t = ref None
 
 let build_map (ind : Names.inductive) : EConstr.t =
-  let open EConstr in
   let bind name ty body =
+    let open EConstr in
     mkLambda
       ({ binder_name = Name (Names.Id.of_string name); binder_relevance = Relevant }, ty, body)
   in

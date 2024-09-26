@@ -1,0 +1,16 @@
+lib: [
+  "_build/install/default/lib/coq-metaprogramming/META"
+  "_build/install/default/lib/coq-metaprogramming/dune-package"
+  "_build/install/default/lib/coq-metaprogramming/opam"
+]
+lib_root: [
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Command.glob" {"coq/user-contrib/DeriveMap/Elpi/Command.glob"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Command.v" {"coq/user-contrib/DeriveMap/Elpi/Command.v"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Command.vo" {"coq/user-contrib/DeriveMap/Elpi/Command.vo"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Example.glob" {"coq/user-contrib/DeriveMap/Elpi/Example.glob"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Example.v" {"coq/user-contrib/DeriveMap/Elpi/Example.v"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Example.vo" {"coq/user-contrib/DeriveMap/Elpi/Example.vo"}
+]
+doc: [
+  "_build/install/default/doc/coq-metaprogramming/README.md"
+]

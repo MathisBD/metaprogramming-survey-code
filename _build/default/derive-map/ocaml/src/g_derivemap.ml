@@ -1,6 +1,6 @@
 let _ = Mltop.add_known_module "derivemap-plugin.plugin"
 
-# 3 "src/g_derivemap.mlg"
+# 3 "derive-map/ocaml/src/g_derivemap.mlg"
   
   (*open Derivemap*)
   open Stdarg
@@ -12,7 +12,7 @@ let () = Vernacextend.static_vernac_extend ~plugin:(Some "derivemap-plugin.plugi
                                      Vernacextend.TyNil)), (let coqpp_body ind
                                                            () = Vernactypes.vtdefault (fun () -> 
                                                                 
-# 10 "src/g_derivemap.mlg"
+# 10 "derive-map/ocaml/src/g_derivemap.mlg"
                                 Derivemap.derive ind 
                                                                 ) in fun ind
                                                            ?loc ~atts ()
