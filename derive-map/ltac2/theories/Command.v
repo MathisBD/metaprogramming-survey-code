@@ -78,13 +78,21 @@ Ltac2 mk_rel (n : int) : constr :=
 Ltac2 mk_var (i : ident) : constr :=
   Constr.Unsafe.make (Constr.Unsafe.Var i).
 
-(* Smart constructor for [Constr.Unsafe.Lambda]. *)
+(* Smart constructor for [Constr.Unsafe.Lambda]. 
+   Does not perform term lifting. *)
 Ltac2 mk_lambda (bind : binder) (body : constr) : constr := 
   Constr.Unsafe.make (Constr.Unsafe.Lambda bind body).
 
-(* Smart constructor for [Constr.Unsafe.Prod]. *)
+(* Smart constructor for [Constr.Unsafe.Prod]. 
+   Does not perform term lifting. *)
 Ltac2 mk_prod (bind : binder) (body : constr) : constr := 
   Constr.Unsafe.make (Constr.Unsafe.Prod bind body).
+
+(* Smart constructor for [Constr.Unsafe.Prod] when the binder is anonymous. 
+   Does not perform term lifting. *)
+Ltac2 mk_arrow (t1 : constr) (t2 : constr) : constr := 
+  Constr.Unsafe.make 
+    (Constr.Unsafe.Prod (Constr.Binder.unsafe_make None Constr.Binder.Relevant t1) t2).
 
 (* Smart constructor for [Constr.Unsafe.App]. 
    It handles gracefully the edge cases where [f] is already an application or [args] is empty. *)
@@ -108,6 +116,9 @@ Ltac2 mk_app (f : constr) (arg : constr) : constr := mk_apps f [| arg |].
 *)
 Ltac2 mk_fix (struct_arg_idx : int) (binder : binder) (body : constr) : constr :=
   Constr.Unsafe.make (Constr.Unsafe.Fix [| struct_arg_idx |] 0 [| binder |] [| body |]).
+
+(* Beta reduce a term. Might not work on open terms. *)
+Ltac2 beta_red (t : constr) : constr := Std.eval_cbv RedFlags.beta t.
 
 (* Unify two terms t1 and t2 *when no goal is focussed*. 
    It only works if t1 and t2 are closed terms (contain no free de Bruijn index).
@@ -164,19 +175,19 @@ Ltac2 fail : t := fun _ => None.
 (* A rule which handles the cases where there is no lifting to be done. *)
 Ltac2 base_apply : t :=
   fun t =>
-    printf "RULE APPLY" ;
+    printf "RULE APPLY on %t" t ;
     lazy_match! t with 
-    | fun (A : Type) => A => Some '(fun A B f => f)
-    | _ => None 
+    | fun (A : Type) => A => printf "SUCCESS" ; Some '(fun (A B : Type) f => f)
+    | _ => printf "FAIL" ; None 
     end.
 
 (* A rule which handles the cases where [t] does not contain [a] (and thus [u] does not contain [b]). *)
 Ltac2 base_id : t :=
   fun t =>
-    printf "RULE ID" ;
+    printf "RULE ID on %t" t ;
     lazy_match! t with 
-    | fun (A : Type) => _ => Some '(fun A B f (x : $t A) => x)
-    | _ => None
+    | fun (A : Type) => _ => printf "SUCCESS" ; Some '(fun (A B : Type) (f : A -> B) (x : $t A) => x)
+    | _ => printf "FAIL" ; None
     end.
 
 (* [or r1 r2] tries [r1] and if it fails applies [r2]. *)
@@ -219,6 +230,10 @@ Ltac2 rec fix_ (f : t -> t) : t :=
 
 End LiftRule.
 
+(* Replace all occurences of [a] with [b] in [t], without performing any lifting. *)
+Ltac2 rec replace_subterm (a : constr) (b : constr) (t : constr) : constr := 
+  if Constr.equal a t then b else Constr.Unsafe.map (replace_subterm a b) t.
+
 (* [constructor_args ctr] returns the types of the arguments of [ctr].
    This assumes the corresponding inductive has exactly one uniform parameter,
    and returns the argument types of [ctr] as a function of this parameter. 
@@ -246,7 +261,10 @@ Ltac2 constructor_arg_types (ctr : constructor) : constr list :=
           tactic_fail "constructor_arg_types : dependent argument"
         else 
           (* Abstract over the inductive parameter. *)
-          let arg_ty := mk_lambda binder_a (Constr.Unsafe.substnl [mk_rel 1] i arg_ty) in
+          let arg_ty := 
+            mk_lambda binder_a 
+              (replace_subterm (mk_rel (Int.add i 1)) (mk_rel 1) arg_ty) 
+          in
           (* Recurse to gather the remaining arguments. *)
           loop (Int.add i 1) (arg_ty :: acc) cty
       | _ => List.rev acc 
@@ -255,6 +273,8 @@ Ltac2 constructor_arg_types (ctr : constructor) : constr list :=
     loop 0 [] cty
   | _ => tactic_fail "constructor_arg_types : constructor type is not a product"
   end.
+
+
 
 (* Lift a mapping [f : a -> b] to operate on the argument [arg] of type [t].
    The parameter [map] is the fixpoint parameter of type [forall A B, (A -> B) -> I A -> I B]. *)
@@ -286,6 +306,15 @@ Ltac2 constructor_arg_types (ctr : constructor) : constr list :=
   | Some ftu => mk_app ftu arg
   end.*)
 
+  (*LiftRule.fix_ (fun rule => 
+          LiftRule.any 
+            [ LiftRule.base_apply 
+            ; LiftRule.base_id 
+            ; LiftRule.list_rule rule
+            ; map_rule
+            ])*)
+      
+
 Ltac2 string_of_int (i : int) : string := Message.to_string (Message.of_int i).
 
 (* The resulting branch abstracts over [A], [B] and [f]. *)
@@ -293,30 +322,52 @@ Ltac2 build_branch (ctr : constructor) : constr :=
   (* Get the argument types of the constructor. *)
   let arg_tys := constructor_arg_types ctr in 
   let n := List.length arg_tys in
+  printf "n=%i arguments of type :" n ; List.iter (printf ">> %t") arg_tys ;
   (* Create [n] variables for the arguments. *)
-  let args := List.init n (fun i => 
-    let name := String.app "x" (string_of_int i) in 
-    Option.get (Ident.of_string name)) 
-  in 
-  printf "ARGS" ; List.iter (printf ">> %I") args ;
+  let args := List.init n (fun i => mk_rel (Int.sub n i)) in 
+  printf "ARGS" ; List.iter (printf ">> %t") args ;
   (* Variables for A, B and f. *)
-  let a := @A in 
-  let b := @B in 
-  let f := @f in 
-  (* Apply the constructor to the (mapped) argument. *)
-  let cb := mk_app (Env.instantiate (Std.ConstructRef ctr)) (mk_var b) in
-  let tmp := List.fold_left2 (fun acc x _ty => mk_app acc (mk_var x)) cb args arg_tys in
-  printf "TMP = %t" tmp ;
-  (* Abstract over the arguments. *)
-  let res := Constr.Unsafe.closenl (a :: b :: f :: args) 1 tmp in
-  printf "RES = %t" res ;
+  let a := mk_rel (Int.add n 3) in 
+  let b := mk_rel (Int.add n 2) in 
+  let f := mk_rel (Int.add n 1) in 
+  printf "a=%t  b=%t  f=%t" a b f ;
+  (* Apply the correct function to each argument. *)
+  let args := List.map2 
+    (fun arg arg_ty => 
+      let rule := LiftRule.or LiftRule.base_apply LiftRule.base_id in
+      (* Apply the rule. *)
+      match rule arg_ty with 
+      | None => Control.throw (Tactic_failure (Some (Message.of_constr arg_ty)))
+      | Some f' => mk_apps (beta_red f') [| a ; b ; f ; arg |]
+      end)
+    args arg_tys
+  in
+  printf "ARGS" ; List.iter (printf ">> %t") args ;
+  (* Apply the constructor to the (mapped) arguments. *)
+  let apps := mk_apps (Env.instantiate (Std.ConstructRef ctr)) (Array.of_list (b :: args)) in
+  printf "APPS = %t" apps ;
+  (* Bind the arguments of the branch. *)
+  let res1 := List.fold_lefti
+    (fun i res ty => 
+      let a := mk_rel (Int.add i 3) in
+      mk_lambda (Constr.Binder.unsafe_make (Some @x) Constr.Binder.Relevant (beta_red (mk_app ty a))) res)
+    apps 
+    arg_tys
+  in
+  printf "RES1 = %t" res1 ;
+  (* Bind a, b and f. *)
+  let res2 :=
+    mk_lambda (Constr.Binder.unsafe_make (Some @a) Constr.Binder.Relevant 'Type)
+      (mk_lambda (Constr.Binder.unsafe_make (Some @b) Constr.Binder.Relevant 'Type)
+        (mk_lambda (Constr.Binder.unsafe_make (Some @f) Constr.Binder.Relevant (mk_arrow (mk_rel 2) (mk_rel 2))) res1))
+  in
+  printf "RES2 = %t" (beta_red res2) ; res2.
   (* Add the binders. *)
-  (* TODO. *)
-  List.fold_left2 
+  (*List.fold_left2 
     (fun res x ty => mk_lambda (Constr.Binder.make (Some x) ))
     res
     (a :: b :: f :: args)
-    ('Type :: 'Type :: 'Type :: arg_tys ).
+    ('Type :: 'Type :: 'Type :: arg_tys )*)
 
   (*(* Build the *)
   let rec loop res arg_tys :=
@@ -367,7 +418,7 @@ Ltac2 build_map (ind : inductive) : constr :=
       (match_ret, Constr.Binder.Relevant) 
       Constr.Unsafe.NoInvert   
       x 
-      (Array.map (fun ctr => mk_apps (build_branch ctr) [| a ; b ; f |]) constructors))
+      (Array.map (fun ctr => beta_red (mk_apps (build_branch ctr) [| a ; b ; f |])) constructors))
   in
   (* Generate the final function. *)
   '(fix map (A B : Type) (f : A -> B) (x : $i A) : $i B := $body).
