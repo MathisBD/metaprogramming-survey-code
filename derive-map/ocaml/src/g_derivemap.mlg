@@ -1,4 +1,4 @@
-DECLARE PLUGIN "derivemap-plugin.plugin"
+DECLARE PLUGIN "coq-metaprogramming.derivemap.plugin"
 
 { 
   open Stdarg
