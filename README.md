@@ -6,13 +6,14 @@ This project contains several example tactics and commands written in Elpi, Ltac
 
 Setup a local opam switch with coq :
 ```
-opam switch create . 5.2.0
-opam install coq.8.19.2
-opam pin add coq 8.19.2
+opam switch create . 5.2.0 --repos default,coq-released=https://coq.inria.fr/opam/released
+```
+and select yes (Y) when asked to create as a new package.
+
+Optionally install development packages. For instance if using VSCode :
+```
+opam install ocaml-lsp-server ocamlformat user-setup
+opam user-setup install
 ```
 
-Install elpi :
-```
-opam repo add coq-released https://coq.inria.fr/opam/released
-opam install coq-elpi
-```
+Use `dune build` to build the examples, and `dune install` if you want to step through the Coq files interactively.

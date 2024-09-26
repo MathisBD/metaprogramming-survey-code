@@ -387,7 +387,7 @@ Ltac2 derive_map (ind_name : string) : constr :=
 (***********************************************************************************)
 (* Testing. *)
 
-Inductive trivial (A : Type) : Type := 
+(*Inductive trivial (A : Type) : Type := 
   | T1 : list A -> trivial A.
 
 Ltac2 Eval derive_map "trivial".
@@ -398,4 +398,4 @@ Inductive bunch A :=
   | Two : A -> bunch A -> bunch A
   | Tagged : bool -> list A -> bool -> bunch A.
 
-Ltac2 Eval derive_map "bunch".
+Ltac2 Eval derive_map "bunch".*)

@@ -1,5 +1,22 @@
 lib: [
   "_build/install/default/lib/coq-metaprogramming/META"
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap.ml" {"derivemap/plugin/derivemap.ml"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap.mli" {"derivemap/plugin/derivemap.mli"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin.a" {"derivemap/plugin/derivemap_plugin.a"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin.cma" {"derivemap/plugin/derivemap_plugin.cma"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin.cmi" {"derivemap/plugin/derivemap_plugin.cmi"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin.cmt" {"derivemap/plugin/derivemap_plugin.cmt"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin.cmx" {"derivemap/plugin/derivemap_plugin.cmx"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin.cmxa" {"derivemap/plugin/derivemap_plugin.cmxa"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin.ml" {"derivemap/plugin/derivemap_plugin.ml"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin__Derivemap.cmi" {"derivemap/plugin/derivemap_plugin__Derivemap.cmi"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin__Derivemap.cmt" {"derivemap/plugin/derivemap_plugin__Derivemap.cmt"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin__Derivemap.cmti" {"derivemap/plugin/derivemap_plugin__Derivemap.cmti"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin__Derivemap.cmx" {"derivemap/plugin/derivemap_plugin__Derivemap.cmx"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin__G_derivemap.cmi" {"derivemap/plugin/derivemap_plugin__G_derivemap.cmi"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin__G_derivemap.cmt" {"derivemap/plugin/derivemap_plugin__G_derivemap.cmt"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin__G_derivemap.cmx" {"derivemap/plugin/derivemap_plugin__G_derivemap.cmx"}
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/g_derivemap.ml" {"derivemap/plugin/g_derivemap.ml"}
   "_build/install/default/lib/coq-metaprogramming/dune-package"
   "_build/install/default/lib/coq-metaprogramming/opam"
 ]
@@ -10,6 +27,19 @@ lib_root: [
   "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Example.glob" {"coq/user-contrib/DeriveMap/Elpi/Example.glob"}
   "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Example.v" {"coq/user-contrib/DeriveMap/Elpi/Example.v"}
   "_build/install/default/lib/coq/user-contrib/DeriveMap/Elpi/Example.vo" {"coq/user-contrib/DeriveMap/Elpi/Example.vo"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Ltac2/Command.glob" {"coq/user-contrib/DeriveMap/Ltac2/Command.glob"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Ltac2/Command.v" {"coq/user-contrib/DeriveMap/Ltac2/Command.v"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Ltac2/Command.vo" {"coq/user-contrib/DeriveMap/Ltac2/Command.vo"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Ltac2/CommandOpen.glob" {"coq/user-contrib/DeriveMap/Ltac2/CommandOpen.glob"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Ltac2/CommandOpen.v" {"coq/user-contrib/DeriveMap/Ltac2/CommandOpen.v"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/Ltac2/CommandOpen.vo" {"coq/user-contrib/DeriveMap/Ltac2/CommandOpen.vo"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/OCaml/Example.glob" {"coq/user-contrib/DeriveMap/OCaml/Example.glob"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/OCaml/Example.v" {"coq/user-contrib/DeriveMap/OCaml/Example.v"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/OCaml/Example.vo" {"coq/user-contrib/DeriveMap/OCaml/Example.vo"}
+  "_build/install/default/lib/coq/user-contrib/DeriveMap/OCaml/derivemap_plugin.cmxs" {"coq/user-contrib/DeriveMap/OCaml/derivemap_plugin.cmxs"}
+]
+libexec: [
+  "_build/install/default/lib/coq-metaprogramming/derivemap/plugin/derivemap_plugin.cmxs" {"derivemap/plugin/derivemap_plugin.cmxs"}
 ]
 doc: [
   "_build/install/default/doc/coq-metaprogramming/README.md"

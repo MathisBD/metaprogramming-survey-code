@@ -1,7 +1,6 @@
 DECLARE PLUGIN "derivemap-plugin.plugin"
 
 { 
-  (*open Derivemap*)
   open Stdarg
 }
 
