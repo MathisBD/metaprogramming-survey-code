@@ -120,16 +120,22 @@ Ltac2 mk_fix (struct_arg_idx : int) (binder : binder) (body : constr) : constr :
 (* Beta reduce a term. Might not work on open terms. *)
 Ltac2 beta_red (t : constr) : constr := Std.eval_cbv RedFlags.beta t.
 
-(* Unify two terms t1 and t2 *when no goal is focussed*. 
+(* Unify two terms t1 and t2. 
    It only works if t1 and t2 are closed terms (contain no free de Bruijn index).
    Returns a boolean indicating whether unification succeeded. 
 
    For some reason Ltac2 unification requires that some goal be focussed :
    see https://github.com/coq/coq/issues/18021 for more info.
-   This is not the case in our setting : the workaround is to create an artificial goal
-   just for unification. This is probably quite slow, which doesn't matter for us.
 *)
 Ltac2 unify_ (t : constr) (u : constr) : bool :=
+  (* Call unification. *)
+  Control.plus 
+    (fun () => Unification.unify_with_current_ts t u ; true)
+    (fun exn => match exn with Internal _ => false | _ => Control.zero exn end).  
+
+(* Many Ltac2 functions require a goal to be focuessed. This is not the case in our setting :
+   the workaround is to create an artificial goal and focus it. *)
+Ltac2 with_goal (f : unit -> 'a) : 'a :=
   (* Create an evar. *)
   let g := 
     match Constr.Unsafe.kind '_ with 
@@ -137,17 +143,14 @@ Ltac2 unify_ (t : constr) (u : constr) : bool :=
     | _ => tactic_fail "unify_"
     end 
   in 
-  (* Focus an arbitrary goal. *)
+  (* Create a goal and focus it. *)
   Control.new_goal g ;
-  Control.focus 1 1 (fun () => 
-    (* Call unification. *)
-    Control.plus 
-      (fun () => Unification.unify_with_current_ts t u ; true))
-      (fun exn => match exn with Internal _ => false | _ => Control.zero exn end).  
+  Control.focus 1 1 f.
+  
 
 (**************************************************************************************)
 
-(* Find the global reference attached to a name. 
+(* Finds the global reference attached to a name. 
    Fails if the name is invalid or is ambiguous. *)
 
 (* Decode a qualified name to a list of identifiers. *)
@@ -165,7 +168,10 @@ Module LiftRule.
 (* A lifting rule lifts a function [f : a -> b] to a function [f' : t a -> t b].
    
    Formally we view a lifting rule as a (partial) mapping from a type former [T : Type -> Type]
-   to a function [F : forall A B, (A -> B) -> T A -> T B]. Both [T] and [F] are closed terms.
+   to a function [F : MapTy -> forall A B, (A -> B) -> T A -> T B], 
+   where MapTy is the type of the recursive mapping function.
+
+   Both [T] and [F] are closed terms.
 *)
 Ltac2 Type t := constr (* T *) -> constr option (* F *).
  
@@ -177,7 +183,7 @@ Ltac2 base_apply : t :=
   fun t =>
     printf "RULE APPLY on %t" t ;
     lazy_match! t with 
-    | fun (A : Type) => A => printf "SUCCESS" ; Some '(fun (A B : Type) f => f)
+    | fun (A : Type) => A => printf "SUCCESS" ; Some '(fun _ (A B : Type) f => f)
     | _ => printf "FAIL" ; None 
     end.
 
@@ -186,7 +192,7 @@ Ltac2 base_id : t :=
   fun t =>
     printf "RULE ID on %t" t ;
     lazy_match! t with 
-    | fun (A : Type) => _ => printf "SUCCESS" ; Some '(fun (A B : Type) (f : A -> B) (x : $t A) => x)
+    | fun (A : Type) => ?_body => printf "SUCCESS" ; Some '(fun _ (A B : Type) (f : A -> B) (x : $t A) => x)
     | _ => printf "FAIL" ; None
     end.
 
@@ -208,17 +214,49 @@ Ltac2 any (rs : t list) : t :=
 (* An example rule for lists. *)
 Ltac2 list_rule (rec_rule : t) : t := 
   fun t =>
-    printf "RULE LIST" ;
+    printf "RULE LIST on %t" t ;
     (* Check [t] is of the right form. *)
-    lazy_match! t with 
-    | fun (A : Type) => list (?u A) => 
+    let u := '(_ : Type -> Type) in 
+    let success := unify_ t '(fun (A : Type) => list ($u A)) in
+    if success then 
+      printf "RECURSING with %t" u ;
       (* Recurse with [u]. *)
       match rec_rule u with 
-      | Some fu => Some '(fun A B f => @List.map ($u A) ($u B) ($fu A B f))
-      | None => None
+      | Some fu => printf "SUCCESS" ; Some '(fun map (A B : Type) (f : A -> B) => @List.map ($u A) ($u B) ($fu map A B f))
+      | None => printf "FAIL" ; None
       end 
-    | _ => None 
-    end.
+    else (printf "FAIL" ; None).
+
+Ltac2 Eval with_goal (fun () =>
+  let i := '(_ : Type -> Type) in
+  let success := 
+    unify_ 
+      '(forall A B : Type, (A -> B) -> (fun _ => list A) B -> list B) 
+      '(forall A B : Type, (A -> B) -> $i A -> $i B)
+  in 
+  if success then printf "SUCCESS %t" i else printf "FAIL").
+
+Ltac2 make_rule (func : constr) (rec_rule : t) : t :=
+  (* Make sure [func] has the right type. *)
+  printf "make_rule TYPE= %t" (Constr.type func) ;
+  let i := '(_ : Type -> Type) in
+  if unify_ (Constr.type func) '(forall (A B : Type), (A -> B) -> $i A -> $i B) then 
+    (* Build the rule *)
+    fun t =>
+      printf "CUSTOM RULE" ;
+      (* Check the head of [t] is build using [i]. *)
+      let u := '(_ : Type -> Type) in
+      if unify_ t '(fun A => $i ($u A)) then 
+        printf "RECURSING with %t" u ;
+        (* Recurse with [u]. *)
+        match rec_rule u with 
+        | Some fu => 
+          printf "SUCCESS" ; 
+          Some '(fun map (A B : Type) (f : A -> B) => $func ($u A) ($u B) ($fu map A B f))
+        | _ => printf "FAIL" ; None
+        end
+      else (printf "FAIL" ; None)
+  else tactic_fail "make_rule : not a mapping function".
 
 (* Fixpoint operation on lift rules. 
    Since Ltac2 uses an eager evaluation strategy, I have to explicitly eta-expand the 
@@ -273,79 +311,51 @@ Ltac2 constructor_arg_types (ctr : constructor) : constr list :=
     loop 0 [] cty
   | _ => tactic_fail "constructor_arg_types : constructor type is not a product"
   end.
-
-
-
-(* Lift a mapping [f : a -> b] to operate on the argument [arg] of type [t].
-   The parameter [map] is the fixpoint parameter of type [forall A B, (A -> B) -> I A -> I B]. *)
-(*Ltac2 rec build_arg (ind : inductive) map a b f (arg : constr) (t : constr) : constr :=
-  (* Replace [a] with [b] in [arg_ty]. *)
-  let u := copy_with a b t in
-  printf "BUILD_ARG a=%t  b=%t  t=%t  u=%t" a b t u ; 
-  (* Custom rule to lift from [a -> b] to [i a -> i b] using [map]. *)
-  let map_rule a b fab t u :=
-    printf "RULE MAP" ;
-    let i := Env.instantiate (Std.IndRef ind) in
-    if Bool.and (Constr.equal t (mk_app i a)) (Constr.equal u (mk_app i b))
-    then Some (mk_apps map [| a ; b ; fab |])
-    else None
-  in
-  (* Build the complete lifting rule we will be using. *)
-  let rule := 
-    LiftRule.fix_ (fun rule => 
-      LiftRule.any 
-        [ LiftRule.base_apply 
-        ; LiftRule.base_id 
-        ; LiftRule.list_rule rule
-        ; map_rule
-        ])
-  in
-  (* Apply the rule. *)
-  match rule a b f t u with 
-  | None => Control.throw (Tactic_failure (Some (Message.of_constr t)))
-  | Some ftu => mk_app ftu arg
-  end.*)
-
-  (*LiftRule.fix_ (fun rule => 
-          LiftRule.any 
-            [ LiftRule.base_apply 
-            ; LiftRule.base_id 
-            ; LiftRule.list_rule rule
-            ; map_rule
-            ])*)
       
 
 Ltac2 string_of_int (i : int) : string := Message.to_string (Message.of_int i).
 
-(* The resulting branch abstracts over [A], [B] and [f]. *)
+(* The resulting branch abstracts over [map], [A], [B] and [f]. *)
 Ltac2 build_branch (ctr : constructor) : constr :=
   (* Get the argument types of the constructor. *)
   let arg_tys := constructor_arg_types ctr in 
   let n := List.length arg_tys in
-  printf "n=%i arguments of type :" n ; List.iter (printf ">> %t") arg_tys ;
   (* Create [n] variables for the arguments. *)
   let args := List.init n (fun i => mk_rel (Int.sub n i)) in 
-  printf "ARGS" ; List.iter (printf ">> %t") args ;
-  (* Variables for A, B and f. *)
+  (* Variables for map, A, B and f. *)
+  let map := mk_rel (Int.add n 4) in
   let a := mk_rel (Int.add n 3) in 
   let b := mk_rel (Int.add n 2) in 
   let f := mk_rel (Int.add n 1) in 
-  printf "a=%t  b=%t  f=%t" a b f ;
   (* Apply the correct function to each argument. *)
   let args := List.map2 
     (fun arg arg_ty => 
-      let rule := LiftRule.or LiftRule.base_apply LiftRule.base_id in
+      (* Custom rule to allow mapping on recursive arguments. *)
+      let map_rule t :=
+        printf "RULE MAP on %t" t ;
+        let i := Env.instantiate (Std.IndRef (Constructor.inductive ctr)) in
+        if unify_ t '(fun (A : Type) => $i A) then 
+          (printf "SUCCESS" ; Some '(fun map A B f => map A B f))
+        else 
+          (printf "FAIL" ; None)
+      in
+      let rule := 
+        LiftRule.fix_ (fun rule => 
+          LiftRule.any 
+            [ LiftRule.base_apply 
+            ; LiftRule.base_id 
+            ; map_rule 
+            ; LiftRule.make_rule '(@List.map) rule]) 
+      in
       (* Apply the rule. *)
       match rule arg_ty with 
       | None => Control.throw (Tactic_failure (Some (Message.of_constr arg_ty)))
-      | Some f' => mk_apps (beta_red f') [| a ; b ; f ; arg |]
+      | Some f' => mk_apps (beta_red f') [| map ; a ; b ; f ; arg |]
       end)
     args arg_tys
   in
-  printf "ARGS" ; List.iter (printf ">> %t") args ;
   (* Apply the constructor to the (mapped) arguments. *)
   let apps := mk_apps (Env.instantiate (Std.ConstructRef ctr)) (Array.of_list (b :: args)) in
-  printf "APPS = %t" apps ;
   (* Bind the arguments of the branch. *)
   let res1 := List.fold_lefti
     (fun i res ty => 
@@ -354,50 +364,19 @@ Ltac2 build_branch (ctr : constructor) : constr :=
     apps 
     arg_tys
   in
-  printf "RES1 = %t" res1 ;
   (* Bind a, b and f. *)
   let res2 :=
-    mk_lambda (Constr.Binder.unsafe_make (Some @a) Constr.Binder.Relevant 'Type)
+  mk_lambda (Constr.Binder.unsafe_make (Some @map) Constr.Binder.Relevant '_)
+    (mk_lambda (Constr.Binder.unsafe_make (Some @a) Constr.Binder.Relevant 'Type)
       (mk_lambda (Constr.Binder.unsafe_make (Some @b) Constr.Binder.Relevant 'Type)
-        (mk_lambda (Constr.Binder.unsafe_make (Some @f) Constr.Binder.Relevant (mk_arrow (mk_rel 2) (mk_rel 2))) res1))
+        (mk_lambda (Constr.Binder.unsafe_make (Some @f) Constr.Binder.Relevant (mk_arrow (mk_rel 2) (mk_rel 2))) res1)))
   in
-  printf "RES2 = %t" (beta_red res2) ; res2.
-  (* Add the binders. *)
-  (*List.fold_left2 
-    (fun res x ty => mk_lambda (Constr.Binder.make (Some x) ))
-    res
-    (a :: b :: f :: args)
-    ('Type :: 'Type :: 'Type :: arg_tys )*)
-
-  (*(* Build the *)
-  let rec loop res arg_tys :=
-    match arg_tys with 
-    | ty :: arg_tys => 
-      let body := loop arg_tys in
-      mk_lambda (Constr.Binder.make )
-      '(fun (x : $ty) => $body x)
-
-  (* Build the arguments for the resulting application. *)
-  let args := 
-    Array.init n (fun i => 
-      let arg := mk_rel (Int.sub n i) in
-      let arg_ty := Array.get arg_tys i in
-      build_arg ind (lift n map) (lift n a) (lift n b) (lift n f) arg (lift (Int.sub n i) arg_ty))
-  in
-  (* Build the final branch. *)
-  let branch := Array.fold_right 
-    (fun ty body => 
-      (* No need to lift the type here. *)
-      mk_lambda (Constr.Binder.unsafe_make None Constr.Binder.Relevant ty) body) 
-    arg_tys
-    (mk_apps (mk_app c (lift n b)) args)  
-  in 
-  branch.*)
-
+  printf "RES2 = %t" (beta_red res2) ; (beta_red res2).
+  
 Ltac2 build_map (ind : inductive) : constr := 
   let i := Env.instantiate (Std.IndRef ind) in
   (* Bind the variables. *)
-  let _map := mk_rel 5 in
+  let map := mk_rel 5 in
   let a := mk_rel 4 in
   let b := mk_rel 3 in
   let f := mk_rel 2 in
@@ -418,56 +397,55 @@ Ltac2 build_map (ind : inductive) : constr :=
       (match_ret, Constr.Binder.Relevant) 
       Constr.Unsafe.NoInvert   
       x 
-      (Array.map (fun ctr => beta_red (mk_apps (build_branch ctr) [| a ; b ; f |])) constructors))
+      (Array.map (fun ctr => beta_red (mk_apps (build_branch ctr) [| map ; a ; b ; f |])) constructors))
   in
   (* Generate the final function. *)
   '(fix map (A B : Type) (f : A -> B) (x : $i A) : $i B := $body).
-
+    
 (* DeriveMap command entry point. It takes as input the name of an inductive 
    and returns the corresponding mapping function. *)
 Ltac2 derive_map (ind_name : string) : constr := 
-  (* Find the inductive in the environment. *)
-  let ind := 
-    match decode_name ind_name with 
-    | None => tactic_fail "Invalid identifier !"
-    | Some ids => 
-      match Env.expand ids with 
-      | [] => tactic_fail "Unknown reference !"
-      | Std.IndRef ind :: _ => ind
-      | _ :: _ => tactic_fail "Not an inductive !"
+  with_goal (fun () => 
+    (* Find the inductive in the environment. *)
+    let ind := 
+      match decode_name ind_name with 
+      | None => tactic_fail "Invalid identifier !"
+      | Some ids => 
+        match Env.expand ids with 
+        | [] => tactic_fail "Unknown reference !"
+        | Std.IndRef ind :: _ => ind
+        | _ :: _ => tactic_fail "Not an inductive !"
+        end
       end
-    end
-  in 
-  let i := Env.instantiate (Std.IndRef ind) in
-  (* Check the inductive has exactly one parameter of type [Type]. *)
-  lazy_match! Constr.type i with 
-  | Type -> _ => ()
-  | _ => tactic_fail "Inductive should have exactly one parameter of type [Type]"
-  end ;
-  (* Build the mapping function. *)
-  let f := build_map ind in
-  printf "Result :" ; printf "%t" f ;
-  (* Typecheck the result to make sure. *)
-  let f := 
-    match Constr.Unsafe.check f with 
-    | Val f => f
-    | Err _ => tactic_fail "Resulting function does not typecheck"
-    end
-  in f.
+    in 
+    let i := Env.instantiate (Std.IndRef ind) in
+    (* Check the inductive has exactly one parameter of type [Type]. *)
+    lazy_match! Constr.type i with 
+    | Type -> _ => ()
+    | _ => tactic_fail "Inductive should have exactly one parameter of type [Type]"
+    end ;
+    (* Build the mapping function. *)
+    let f := build_map ind in
+    printf "Result :" ; printf "%t" f ;
+    (* Typecheck the result to make sure. *)
+    let f := 
+      match Constr.Unsafe.check f with 
+      | Val f => f
+      | Err _ => tactic_fail "Resulting function does not typecheck"
+      end
+    in f).
 
 (***********************************************************************************)
 (* Testing. *)
 
-
 Inductive trivial (A : Type) : Type := 
-  | T1 : bool -> A -> nat -> trivial A.
+  | T1 : A -> trivial A -> trivial A.
 
-Ltac2 Eval derive_map "trivial".
-
+Ltac2 Eval derive_map "list".
 
 Inductive bunch A :=
-  | One : A -> bunch A
-  | Two : A -> bunch A -> bunch A
-  | Tagged : bool -> list A -> bool -> bunch A.
+  (*| One : A -> bunch A
+  | Two : A -> bunch A -> bunch A*)
+  | Tagged : list A -> bunch A.
 
 Ltac2 Eval derive_map "bunch".
