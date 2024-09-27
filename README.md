@@ -1,6 +1,6 @@
 # Description 
 
-This project contains several example tactics and commands written in Elpi, Ltac2, MetaCoq and Ocaml.
+This project contains several example Coq tactics and commands written in Elpi, Ltac2, MetaCoq and Ocaml.
 
 # Setup
 

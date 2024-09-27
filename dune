@@ -4,4 +4,4 @@
 (env
  (dev
   (flags
-   (:standard -warn-error +A -w -32-27 -rectypes))))
+   (:standard -warn-error +A -w -27-32-69 -rectypes))))
