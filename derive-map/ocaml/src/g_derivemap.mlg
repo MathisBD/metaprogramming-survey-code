@@ -8,3 +8,7 @@ DECLARE PLUGIN "coq-metaprogramming.derivemap.plugin"
 VERNAC COMMAND EXTEND DeriveMap CLASSIFIED AS SIDEFF
 | [ "DeriveMap" ref(ind) ] -> { Derivemap.derive ind }
 END
+
+VERNAC COMMAND EXTEND TestCommand CLASSIFIED AS QUERY
+| [ "TestCommand" ref(id) ] -> { Derivemap.test id }
+END
