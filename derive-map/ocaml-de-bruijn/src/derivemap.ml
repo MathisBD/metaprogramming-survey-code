@@ -1,8 +1,3 @@
-(** In this file I try out a "locally nameless" style of programming, 
-    by (ab)using the [Var] constructor of terms instead of using de Bruijn indices
-    with the [Rel] constructor. 
-*)
-
 (**************************************************************************************)
 (** Globals. *)
 (**************************************************************************************)
@@ -11,31 +6,13 @@
     Instead we create our own evar map (from the global environment) whenever the DeriveMap command
     is called, and store it in this global reference.
 
-    This seems perfectly reasonable.
+    This seems quite reasonable.
 *)
 let global_evd : Evd.evar_map ref = ref Evd.empty
-
-(** To support the locally nameless style of programming, we need to store the types of 
-    the named variables introduced so far. Since we are not in a proof and we obviously do not wish
-    to use section variables for this purpose, we cannot simply store this information in the global
-    environment (or at least I did not find how to do it). Instead we use a global [Context.Named.pt]
-    that we pass explicitly to the functions where it matters. 
-    
-    This is very hacky.
-*)
-let global_ctx : (Constr.constr, Constr.types, Sorts.relevance) Context.Named.pt ref =
-  ref Context.Named.empty
 
 (**************************************************************************************)
 (** Manipulating terms. *)
 (**************************************************************************************)
-
-(** [kername path name] creates the kernel name with given [path] and [name]. 
-    For instance [kername ["Coq" ; "Init" ; "Datatypes"] "nat"] creates the kernel name of the inductive [nat]. *)
-let kername (path : string list) (name : string) =
-  let open Names in
-  let dir = DirPath.make (path |> List.rev |> List.map Id.of_string) in
-  KerName.make (ModPath.MPfile dir) (Label.make name)
 
 (** [fresh_type ()] creates a [Type] term with a fresh universe level, 
     and adds the new universe level to the global evar state. *)
@@ -56,50 +33,14 @@ let fresh_evar ?(ty : EConstr.t option) () : EConstr.t =
   global_evd := new_evd;
   evar
 
-(** [unify sigma t u] tries to unify [t] with [u] in evar map [sigma] :
+(** [unify sigma t u] tries to unify [t] with [u] in the global evar map :
     - If it succeeds it returns [true] and updates the global evar map. 
     - If it fails it returns [false]. *)
 let unify (t : EConstr.t) (u : EConstr.t) : bool =
   try
-    (* Don't forget : we do unification in a custom named context. *)
-    let env = Environ.push_named_context !global_ctx (Global.env ()) in
-    global_evd := Unification.w_unify env !global_evd Conversion.CONV t u;
+    global_evd := Unification.w_unify (Global.env ()) !global_evd Conversion.CONV t u;
     true
   with _ -> false
-
-(** [fresh_ident basename] returns a fresh identifier built from [basename] 
-    and which is guaranteed to be distinct from all identifiers returned by this function so far. *)
-let fresh_ident : string -> Names.Id.t =
-  let used_names = ref Names.Id.Set.empty in
-  fun basename ->
-    let name = Namegen.next_ident_away (Names.Id.of_string_soft basename) !used_names in
-    used_names := Names.Id.Set.add name !used_names;
-    name
-
-(** [with_fresh_var basename ty k] generates a fresh identifier built from [basename], 
-    adds a corresponding declaration to [global_ctx] and executes the continuation [k]
-    in this augmented context. The declaration is removed when this function returns. *)
-let with_fresh_var (basename : string) (ty : EConstr.t) (k : Names.Id.t -> 'a) : 'a =
-  let id = fresh_ident basename in
-  global_ctx :=
-    LocalAssum
-      ({ binder_name = id; binder_relevance = Sorts.Relevant }, EConstr.to_constr !global_evd ty)
-    :: !global_ctx;
-  let res = k id in
-  (global_ctx := match !global_ctx with [] -> [] | _ :: ctx -> ctx);
-  res
-
-(** Generalizes [with_fresh_var] to several variables. The last variables in the list 
-    are introduced first in the context. 
-    
-    The continuation receives the variables in the same order they are given to [with_fresh_vars]. *)
-let rec with_fresh_vars (basenames : string list) (tys : EConstr.t list) (k : Names.Id.t list -> 'a)
-    : 'a =
-  match (basenames, tys) with
-  | [], [] -> k []
-  | b :: basenames, t :: tys ->
-      with_fresh_vars basenames tys (fun ids -> with_fresh_var b t @@ fun id -> k (id :: ids))
-  | _ -> failwith "with_fresh_var: lengths differ"
 
 (** [app f x] is a lightweight notation for [mkApp (f, [| x |])]. *)
 let app (f : EConstr.t) (x : EConstr.t) : EConstr.t = EConstr.mkApp (f, [| x |])
@@ -107,71 +48,25 @@ let app (f : EConstr.t) (x : EConstr.t) : EConstr.t = EConstr.mkApp (f, [| x |])
 (** [apps f xs] is a lightweight notation for [mkApp (f, xs )]. *)
 let apps (f : EConstr.t) (xs : EConstr.t array) : EConstr.t = EConstr.mkApp (f, xs)
 
-(** [namedLambda ?relevance name ty body] makes a lambda abstraction with the given parameters,
-    in the locally nameless style. 
+(** [arr t1 t2] makes the non-dependent arrow [t1 -> t2].
+    It takes care of lifting the de Bruijn indices in [t2] by [1]. *)
+let arr (t1 : EConstr.t) (t2 : EConstr.t) : EConstr.t = EConstr.mkArrowR t1 (EConstr.Vars.lift 1 t2)
 
-    Inside [body], the global context is augmented with a declaration for the new identifier. *)
-let namedLambda ?(relevance = EConstr.ERelevance.relevant) (name : string) (ty : EConstr.types)
-    (body : Names.Id.t -> EConstr.constr) : EConstr.constr =
-  with_fresh_var name ty @@ fun id ->
-  EConstr.mkNamedLambda !global_evd { binder_name = id; binder_relevance = relevance } ty (body id)
+let prod (name : string) (ty : EConstr.t) (body : EConstr.t) : EConstr.t =
+  EConstr.mkProd
+    ( { binder_name = Name (Names.Id.of_string_soft name)
+      ; binder_relevance = EConstr.ERelevance.relevant
+      }
+    , ty
+    , body )
 
-(** [namedProd ?relevance name ty body] makes a dependent with the given parameters,
-    in the locally nameless style. *)
-let namedProd ?(relevance = EConstr.ERelevance.relevant) (name : string) (ty : EConstr.types)
-    (body : Names.Id.t -> EConstr.constr) : EConstr.constr =
-  with_fresh_var name ty @@ fun id ->
-  EConstr.mkNamedProd !global_evd { binder_name = id; binder_relevance = relevance } ty (body id)
-
-(** Generalizes [namedLambda] to multiple variables in a [EConstr.rel_context]. 
-
-    The body receives the variables in the same order they are stored in the context, 
-    i.e. the most recent (= inner-most) variable first. 
-*)
-let namedLambdaContext (ctx : EConstr.rel_context) (body : Names.Id.t list -> EConstr.t) : EConstr.t
-    =
-  let open EConstr in
-  let open Context in
-  let open Rel in
-  (* Get the names and types of the variables in the context. *)
-  let names =
-    ctx
-    |> List.map @@ fun decl ->
-       match Declaration.get_name decl with Name n -> Names.Id.to_string n | Anonymous -> "x"
-  in
-  let tys = List.map Declaration.get_type ctx in
-  with_fresh_vars names tys @@ fun ids ->
-  (* Build the body and substitute de Bruijn indices for the identifiers. *)
-  let body = Vars.subst_vars !global_evd ids (body ids) in
-  (* Add lambda abstractions. *)
-  List.fold_left
-    (fun body decl ->
-      mkLambda
-        ( { binder_name = Declaration.get_name decl
-          ; binder_relevance = Declaration.get_relevance decl
-          }
-        , Declaration.get_type decl
-        , body ))
-    body ctx
-
-(** [namedFix ?relevance name rec_arg_idx ty body] makes a single fixpoint with the given parameters,
-    in the locally nameless style :
-    - [name] is the name of the fixpoint parameter.
-    - [rec_arg_idx] is the index of the (structurally) recursive argument, starting at [0].
-    - [ty] is the type of the fixpoint parameter.
-    - [body] is the body of the fixpoint, which has access to the fixpoint parameter.
-
-    For instance to build the fixpoint [fix add (n : nat) (m : nat) {struct_ m} : nat := ...]
-    one could use [namedFix "add" 1 '(nat -> nat -> nat) (fun add -> ...)].
-*)
-let namedFix ?(relevance = EConstr.ERelevance.relevant) (name : string) (rec_arg_idx : int)
-    (ty : EConstr.types) (body : Names.Id.t -> EConstr.constr) : EConstr.constr =
-  with_fresh_var name ty @@ fun id ->
-  EConstr.mkFix
-    ( ([| rec_arg_idx |], 0)
-    , ( [| { binder_name = Name id; binder_relevance = relevance } |]
-      , [| ty |]
-      , [| EConstr.Vars.subst_var !global_evd id @@ body id |] ) )
+let lambda (name : string) (ty : EConstr.t) (body : EConstr.t) : EConstr.t =
+  EConstr.mkLambda
+    ( { binder_name = Name (Names.Id.of_string_soft name)
+      ; binder_relevance = EConstr.ERelevance.relevant
+      }
+    , ty
+    , body )
 
 (** [subterm x t] checks whether [x] occurs in [t], modulo alpha equivalence. 
     It takes time [O(size(x) * size(t))]. *)
@@ -246,83 +141,49 @@ module Lift = struct
       one has to take care of eta-expanding the definition (as is done in [fix]). *)
   let rec fix (f : rule -> rule) : rule = fun lp -> f (fix f) lp
 
-  (** An example rule for lists. *)
-  (*let list_rule (rec_rule : rule) : rule =
-    fun lp ->
-     let open EConstr in
-     Log.printf "RULE LIST on %s" (Log.show_econstr !global_evd lp.t);
-     (* Create a unification variable ?alpha which takes lp.a as a parameter. *)
-     let alpha = fresh_evar ~ty:(mkArrowR (fresh_type ()) (fresh_type ())) () in
-     (* Unify [T =?= list (?alpha A)] and [U =?= list (?alpha B)]. *)
-     let list_ind = (Names.MutInd.make1 @@ kername [ "Coq"; "Init"; "Datatypes" ] "list", 0) in
-     let b1 = unify lp.t (apply_ind list_ind @@ app alpha lp.a ) in
-     let b2 = unify lp.u (apply_ind list_ind @@ app alpha lp.b ) in
-     if b1 && b2
-     then (
-       (* Recurse to lift [f : A -> B] to [f' : alpha -> beta]. *)
-       Log.printf "RECURSING on %s" (Log.show_econstr !global_evd @@ app alpha lp.a ));
-       match rec_rule { lp with t = app alpha lp.a ; u = app alpha lp.b  } with
-       | None ->
-           Log.printf "FAIL";
-           None
-       | Some f' ->
-           Log.printf "SUCCESS";
-           let (list_map, map_inst), _ =
-             UnivGen.fresh_constant_instance (Global.env ())
-             @@ Names.Constant.make1
-             @@ kername [ "Coq"; "Lists"; "List" ] "map"
-           in
-           Some
-             (app
-                ( mkConstU (list_map, EInstance.make map_inst)
-                , [| mkApp (alpha, [| lp.a |]); mkApp (alpha, [| lp.b |]); f' |] )))
-     else (
-       Log.printf "FAIL";
-       None)*)
-
   (** [detruct_map f] checks that [f] is a mapping function i.e. has type [forall (A B : Type), (A -> B) -> T A -> T B]
       and returns [Some T] if it succeeds or [None] if it fails. *)
-  let destruct_map (map_func : EConstr.t) : EConstr.t option =
-    let open EConstr in
-    let t = fresh_evar ~ty:(mkArrowR (fresh_type ()) (fresh_type ())) () in
-    let pat =
-      namedProd "a" (fresh_type ()) @@ fun a ->
-      namedProd "b" (fresh_type ()) @@ fun b ->
-      mkArrowR (mkArrowR (mkVar a) (mkVar b)) (mkArrowR (app t @@ mkVar a) (app t @@ mkVar b))
-    in
-    let map_ty = Retyping.get_type_of (Global.env ()) !global_evd map_func in
-    let success = unify pat map_ty in
-    if success then Some t else None
+  (*let destruct_map (map_func : EConstr.t) : EConstr.t option =
+      let open EConstr in
+      let t = fresh_evar ~ty:(mkArrowR (fresh_type ()) (fresh_type ())) () in
+      let pat =
+        namedProd "a" (fresh_type ()) @@ fun a ->
+        namedProd "b" (fresh_type ()) @@ fun b ->
+        mkArrowR (mkArrowR (mkVar a) (mkVar b)) (mkArrowR (app t @@ mkVar a) (app t @@ mkVar b))
+      in
+      let map_ty = Retyping.get_type_of (Global.env ()) !global_evd map_func in
+      let success = unify pat map_ty in
+      if success then Some t else None
 
-  let custom_rule (rec_rule : rule) (map_func : EConstr.t) : rule =
-    (* Extract the type former. *)
-    match destruct_map map_func with
-    | None -> Log.error "Lift.custom_rule : error"
-    | Some type_former ->
-        fun lp ->
-          Log.printf "RULE %s on %s"
-            (Log.show_econstr !global_evd type_former)
-            (Log.show_econstr !global_evd lp.t);
-          (* Create a unification variable ?alpha which takes lp.a as a parameter. *)
-          let alpha = fresh_evar ~ty:(EConstr.mkArrowR (fresh_type ()) (fresh_type ())) () in
-          (* Unify [T =?= type_former (?alpha A)] and [U =?= type_former (?alpha B)]. *)
-          let b1 = unify lp.t (app type_former @@ app alpha lp.a) in
-          let b2 = unify lp.u (app type_former @@ app alpha lp.b) in
-          if b1 && b2
-          then begin
-            (* Recurse to lift [f : A -> B] to [f' : alpha A -> alpha B]. *)
-            Log.printf "RECURSING on %s" (Log.show_econstr !global_evd @@ app alpha lp.a);
-            match rec_rule { lp with t = app alpha lp.a; u = app alpha lp.b } with
-            | None ->
-                Log.printf "FAIL";
-                None
-            | Some f' ->
-                Log.printf "SUCCESS";
-                Some (apps map_func [| app alpha lp.a; app alpha lp.b; f' |])
-          end
-          else (
-            Log.printf "FAIL";
-            None)
+    let custom_rule (rec_rule : rule) (map_func : EConstr.t) : rule =
+      (* Extract the type former. *)
+      match destruct_map map_func with
+      | None -> Log.error "Lift.custom_rule : error"
+      | Some type_former ->
+          fun lp ->
+            Log.printf "RULE %s on %s"
+              (Log.show_econstr !global_evd type_former)
+              (Log.show_econstr !global_evd lp.t);
+            (* Create a unification variable ?alpha which takes lp.a as a parameter. *)
+            let alpha = fresh_evar ~ty:(EConstr.mkArrowR (fresh_type ()) (fresh_type ())) () in
+            (* Unify [T =?= type_former (?alpha A)] and [U =?= type_former (?alpha B)]. *)
+            let b1 = unify lp.t (app type_former @@ app alpha lp.a) in
+            let b2 = unify lp.u (app type_former @@ app alpha lp.b) in
+            if b1 && b2
+            then begin
+              (* Recurse to lift [f : A -> B] to [f' : alpha A -> alpha B]. *)
+              Log.printf "RECURSING on %s" (Log.show_econstr !global_evd @@ app alpha lp.a);
+              match rec_rule { lp with t = app alpha lp.a; u = app alpha lp.b } with
+              | None ->
+                  Log.printf "FAIL";
+                  None
+              | Some f' ->
+                  Log.printf "SUCCESS";
+                  Some (apps map_func [| app alpha lp.a; app alpha lp.b; f' |])
+            end
+            else (
+              Log.printf "FAIL";
+              None)*)
 end
 
 (**************************************************************************************)
@@ -333,64 +194,61 @@ end
     - AddMap adds rules to the database. 
     - DeriveMap uses the rules in the database.   
 *)
-let map_db : EConstr.t list ref = Summary.ref ~name:"DeriveMap Rule Database" []
+(*let map_db : EConstr.t list ref = Summary.ref ~name:"DeriveMap Rule Database" []*)
 
-(** A small record to hold the parameters of the mapping function while 
+(** A small record to hold the parameters (as de Bruijn indices) of the mapping function while 
     we build its body. *)
-type params =
-  { ind : Names.Ind.t
-  ; map : Names.Id.t
-  ; a : Names.Id.t
-  ; b : Names.Id.t
-  ; f : Names.Id.t
-  ; _x : Names.Id.t
-  }
+type params = { ind : Names.Ind.t; map : int; a : int; b : int; f : int; x : int }
 
-let build_arg (p : params) (arg : EConstr.t) (arg_ty : EConstr.t) : EConstr.t =
+let build_arg (p : params) (n : int) (arg : int) (arg_ty : EConstr.t) : EConstr.t =
   let open EConstr in
   (* Construct the lifting problem. *)
   let lp =
-    Lift.
-      { a = mkVar p.a
-      ; b = mkVar p.b
-      ; f = mkVar p.f
-      ; t = arg_ty
-      ; u = Vars.replace_vars !global_evd [ (p.a, mkVar p.b) ] arg_ty
-      }
+    Lift.{ a = mkRel (p.a + n); b = mkRel (p.b + n); f = mkRel (p.f + n); t = arg_ty; u = arg_ty }
   in
   (* Build a custom rule for [T = Ind A]. *)
-  let map_rule : Lift.rule =
-   fun lp ->
-    if eq_constr !global_evd lp.t (apply_ind p.ind lp.a)
-    then Some (mkApp (mkVar p.map, [| lp.a; lp.b; lp.f |]))
-    else None
-  in
+  (*let map_rule : Lift.rule =
+     fun lp ->
+      if eq_constr !global_evd lp.t (apply_ind p.ind lp.a)
+      then Some (mkApp (mkVar p.map, [| lp.a; lp.b; lp.f |]))
+      else None
+    in*)
   (* Build the rule we will use to solve our lifting problem.
      We use the rules in the database in addition to [map_rule]. *)
-  let rule =
-    let open Lift in
-    fix @@ fun rec_rule ->
-    sequence (apply_rule :: id_rule :: map_rule :: List.map (custom_rule rec_rule) !map_db)
-  in
+  (*let rule =
+      let open Lift in
+      fix @@ fun rec_rule ->
+      sequence (apply_rule :: id_rule :: map_rule :: List.map (custom_rule rec_rule) !map_db)
+    in*)
+  let rule = Lift.sequence [ Lift.apply_rule; Lift.id_rule ] in
   (* Solve the lifting problem. *)
   match rule lp with
-  | Some f' -> mkApp (f', [| arg |])
+  | Some f' -> app f' (mkRel arg)
   | None ->
-      Log.error "Failed to lift mapping function of type [%s -> %s] on argument of type [%s]"
-        (Log.show_econstr !global_evd lp.a)
-        (Log.show_econstr !global_evd lp.b)
+      Log.error
+        "Failed to lift mapping function of type [Rel %s -> Rel %s] on argument of type [%s]"
+        (Log.show_econstr !global_evd (n + lp.a))
+        (Log.show_econstr !global_evd (n + lp.b))
         (Log.show_econstr !global_evd lp.t)
 
 let build_branch (p : params) (ca : Inductiveops.constructor_summary)
     (cb : Inductiveops.constructor_summary) : EConstr.t =
   let open EConstr in
-  (* Bind the arguments of the constructor. *)
-  namedLambdaContext ca.cs_args @@ fun args ->
   (* Map the correct function over each argument. *)
+  let n = List.length ca.cs_args in
   let arg_tys = List.map Context.Rel.Declaration.get_type ca.cs_args in
-  let mapped_args = List.map2 (build_arg p) (List.map mkVar args) arg_tys in
+  let mapped_args = List.mapi (fun i ty -> build_arg p n (i + 1) ty) arg_tys in
   (* Apply the constructor to the arguments. *)
-  mkApp (mkConstructU cb.cs_cstr, Array.of_list (mkVar p.b :: (List.rev @@ mapped_args)))
+  let body =
+    mkApp (mkConstructU cb.cs_cstr, Array.of_list (mkRel (n + p.b) :: List.rev mapped_args))
+  in
+  (* Bind the arguments of the constructor. *)
+  List.fold_left
+    (fun body decl ->
+      let open Context.Rel.Declaration in
+      mkLambda
+        ({ binder_name = get_name decl; binder_relevance = get_relevance decl }, get_type decl, body))
+    body ca.cs_args
 
 let build_map (ind : Names.inductive) : EConstr.t =
   let open EConstr in
@@ -401,35 +259,30 @@ let build_map (ind : Names.inductive) : EConstr.t =
     |> Inductiveops.get_constructors (Global.env ())
   in
   (* Make the type of the recursive mapping function. *)
-  let map_ty =
-    namedProd "a" (fresh_type ()) @@ fun a ->
-    namedProd "b" (fresh_type ()) @@ fun b ->
-    mkArrowR
-      (mkArrowR (mkVar a) (mkVar b))
-      (mkArrowR (apply_ind ind @@ mkVar a) (apply_ind ind @@ mkVar b))
-  in
+  (*let map_ty =
+      prod "a" (fresh_type ())
+      @@ prod "b" (fresh_type ())
+      @@ arr (arr (mkRel 2) (mkRel 1)) (arr (apply_ind ind @@ mkRel 2) (apply_ind ind @@ mkRel 1))
+    in*)
   (* Abstract over the input variables. *)
-  namedFix "map" 3 map_ty @@ fun map ->
-  namedLambda "a" (fresh_type ()) @@ fun a ->
-  namedLambda "b" (fresh_type ()) @@ fun b ->
-  namedLambda "f" (mkArrowR (mkVar a) (mkVar b)) @@ fun f ->
-  namedLambda "x" (apply_ind ind @@ mkVar a) @@ fun x ->
+  (*fix "map" 3 map_ty @@ fun map ->*)
+  lambda "a" (fresh_type ())
+  @@ lambda "b" (fresh_type ())
+  @@ lambda "f" (arr (mkRel 2) (mkRel 1))
+  @@ lambda "x" (apply_ind ind @@ mkRel 3)
+  @@
+  let p = { ind; map = 5; a = 4; b = 3; f = 2; x = 1 } in
   (* Construct the case return clause. *)
-  let case_return =
-    namedLambda "_" (apply_ind ind @@ mkVar a) @@ fun _ -> apply_ind ind @@ mkVar b
-  in
+  let case_return = lambda "_" (apply_ind ind @@ mkRel p.a) @@ apply_ind ind @@ mkRel (p.b + 1) in
   (* Construct the case branches. *)
   let branches =
-    Array.map2
-      (build_branch { ind; map; a; b; f; _x = x })
-      (constructors @@ mkVar a)
-      (constructors @@ mkVar b)
+    Array.map2 (build_branch p) (constructors @@ mkRel p.a) (constructors @@ mkRel p.b)
   in
   (* Finally construct the case expression. *)
   Inductiveops.simple_make_case_or_project (Global.env ()) !global_evd
     (Inductiveops.make_case_info (Global.env ()) ind Constr.RegularStyle)
     (case_return, ERelevance.relevant)
-    Constr.NoInvert (mkVar x) branches
+    Constr.NoInvert (mkRel p.x) branches
 
 (** [DeriveMap] command entry point. *)
 let derive (ind_name : Libnames.qualid) : unit =
@@ -467,9 +320,9 @@ let derive (ind_name : Libnames.qualid) : unit =
        ~opaque:false ~body:func !global_evd
 
 (** [AddMap] command entry point. *)
-let add (map_func : Constrexpr.constr_expr) : unit =
-  (* Create the evar map. *)
-  global_evd := Evd.from_env @@ Global.env ();
+let add (_map_func : Constrexpr.constr_expr) : unit = ()
+(* Create the evar map. *)
+(*global_evd := Evd.from_env @@ Global.env ();
   (* Internalize the function. *)
   let evd, map_func = Constrintern.interp_constr_evars (Global.env ()) !global_evd map_func in
   global_evd := evd;
@@ -478,4 +331,4 @@ let add (map_func : Constrexpr.constr_expr) : unit =
   | None -> Log.error "Provided function is not a mapping function."
   | Some _ ->
       (* Add the function to the map database. *)
-      map_db := map_func :: !map_db
+      map_db := map_func :: !map_db*)
