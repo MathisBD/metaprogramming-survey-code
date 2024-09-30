@@ -4,11 +4,14 @@ DECLARE PLUGIN "coq-metaprogramming.derivemap.plugin"
   open Stdarg
 }
 
-(* Declare the "DeriveMap" Coq command. *)
-VERNAC COMMAND EXTEND DeriveMap CLASSIFIED AS SIDEFF
-| [ "DeriveMap" ref(ind) ] -> { Derivemap.derive ind }
+(* Declare the "AddMap" Coq command. *)
+VERNAC COMMAND EXTEND AddMap CLASSIFIED AS SIDEFF
+| [ "AddMap" constr(map) ] -> { Derivemap.add map }
 END
 
-VERNAC COMMAND EXTEND TestCommand CLASSIFIED AS QUERY
-| [ "TestCommand" ref(id) ] -> { Derivemap.test id }
+(* Declare the "DeriveMap" Coq command. *)
+VERNAC COMMAND EXTEND DeriveMap CLASSIFIED AS SIDEFF
+| [ "DeriveMap" ref(ind_ref) ] -> { Derivemap.derive ind_ref }
 END
+
+

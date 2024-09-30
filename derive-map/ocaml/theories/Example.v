@@ -1,10 +1,13 @@
 Declare ML Module "coq-metaprogramming.derivemap.plugin".
 
+Require List.
 
-Inductive mylist A :=
-  | mynil : mylist A
-  | mycons : A -> list (mylist A) -> mylist A.
+AddMap @List.map.
 
-(*TestCommand mydef.*)
+Inductive tree A :=
+  | Leaf : A -> tree A
+  | Node : bool -> tree (list A) -> list (list (tree A)) -> tree A.
 
-DeriveMap mylist.
+DeriveMap tree.
+
+(*Check tree_map.*)
