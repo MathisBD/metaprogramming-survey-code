@@ -1,0 +1,17 @@
+DECLARE PLUGIN "coq-metaprogramming.derivemap.ocamldebruijn.plugin"
+
+{ 
+  open Stdarg
+}
+
+(* Declare the "AddMap" Coq command. *)
+VERNAC COMMAND EXTEND AddMap CLASSIFIED AS SIDEFF
+| [ "AddMap" constr(map) ] -> { Derivemap.add map }
+END
+
+(* Declare the "DeriveMap" Coq command. *)
+VERNAC COMMAND EXTEND DeriveMap CLASSIFIED AS SIDEFF
+| [ "DeriveMap" ref(ind_ref) ] -> { Derivemap.derive ind_ref }
+END
+
+

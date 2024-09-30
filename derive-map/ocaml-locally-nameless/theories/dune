@@ -1,0 +1,4 @@
+(coq.theory
+ (name DeriveMap.OCamlLocallyNameless)
+ (package coq-metaprogramming)
+ (plugins coq-metaprogramming.derivemap.ocamllocallynameless.plugin))

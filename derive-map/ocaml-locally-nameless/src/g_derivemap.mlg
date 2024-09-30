@@ -1,4 +1,4 @@
-DECLARE PLUGIN "coq-metaprogramming.derivemap.plugin"
+DECLARE PLUGIN "coq-metaprogramming.derivemap.ocamllocallynameless.plugin"
 
 { 
   open Stdarg
