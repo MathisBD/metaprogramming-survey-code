@@ -1,12 +1,13 @@
-DECLARE PLUGIN "coq-metaprogramming.derivemap.ocamllocallynameless.plugin"
+DECLARE PLUGIN "coq-metaprogramming.derivemap.plugin"
 
 { 
   open Stdarg
+  module Derivemap = Derivemap_locally_nameless
 }
 
 (* Declare the "AddMap" Coq command. *)
 VERNAC COMMAND EXTEND AddMap CLASSIFIED AS SIDEFF
-| [ "AddMap" constr(map) ] -> { Derivemap.add map }
+| [ "AddMap" ref(map_ref) ] -> { Derivemap.add map_ref }
 END
 
 (* Declare the "DeriveMap" Coq command. *)

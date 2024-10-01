@@ -63,12 +63,15 @@ main [str IndName] :- std.do! [
   std.assert! (ParamTy = sort _) "The inductive parameter's type should be Type.",
   % Build the map function.
   build-map Ind ParamTy F,
-  coq.say { coq.term->string F },
+  %coq.say { coq.term->string F },
   std.assert-ok! (coq.typecheck F _) "Resulting function does not typecheck! Aborting.",
-  % Add the function to the Coq global environment.
+  % Add the function to the Coq global environment :
+  % make it universe polymorphic if and only if the inductive is universe polymorphic.
   Name is IndName ^ "_map",
   coq.ensure-fresh-global-id Name FName,
-  coq.env.add-const FName F _ @transparent! C,
+  if (coq.env.univpoly? (indt Ind) _) 
+    (@univpoly! => coq.env.add-const FName F _ @transparent! C)
+    (coq.env.add-const FName F _ @transparent! C),
   coq.say "Added function under name" C,
   % Set implicit arguments for the function.
   coq.arguments.set-implicit (const C) [[ maximal, maximal, explicit, explicit ]]
@@ -86,7 +89,7 @@ pred build-map
 build-map I PTy 
   {{ fun (A B : lp:PTy) (f : A -> B) => fix map (x : lp:(FI A)) {struct x} : lp:(FI B) := lp:(Match map A B f x) }} 
 :- std.do! [
-  (pi x\ coq.mk-app (global (indt I)) [x] (FI x)),
+  (pi x\ coq.mk-app { coq.env.global (indt I) } [x] (FI x)),
   % Bind the first arguments.
   @pi-decl `a` PTy a\
   @pi-decl `b` PTy b\
