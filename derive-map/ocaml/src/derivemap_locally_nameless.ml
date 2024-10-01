@@ -113,7 +113,7 @@ let namedLambdaContext env sigma (ctx : EConstr.rel_context)
     - [body] is the body of the fixpoint, which has access to the fixpoint parameter.
 
     For instance to build the fixpoint [fix add (n : nat) (m : nat) {struct_ m} : nat := ...]
-    one could use [namedFix env sigma "add" 1 '(nat -> nat -> nat) (fun add -> ...)].
+    one could use [namedFix env sigma "add" 1 '(nat -> nat -> nat) (fun env sigma add -> ...)].
 *)
 let namedFix env sigma ?(relevance = EConstr.ERelevance.relevant) (name : string)
     (rec_arg_idx : int) (ty : EConstr.types)
@@ -257,7 +257,8 @@ end
       - AddMap adds rules to the database.
       - DeriveMap uses the rules in the database.
  *)
-let map_db : Names.GlobRef.t list ref = Summary.ref ~name:"Derivemap_explicit Rule Database" []
+let map_db : Names.GlobRef.t list ref =
+  Summary.ref ~name:"Derivemap_locally_nameless Rule Database" []
 
 (** A small record to hold the parameters of the mapping function while
       we build its body. *)
@@ -394,9 +395,8 @@ let derive (ind_name : Libnames.qualid) : unit =
   let basename =
     Names.Id.of_string_soft @@ (Names.Id.to_string @@ Libnames.qualid_basename ind_name) ^ "_map"
   in
-  (* TODO : ensure it is fresh. *)
-  let name = basename in
-  (*let name = (*Namegen.next_global_ident_away basename @@ Environ *) in*)
+  (* Ensure it is fresh. *)
+  let name = Namegen.next_global_ident_away basename Names.Id.Set.empty in
   (* Add the function to the global environment. *)
   let info =
     Declare.Info.make ~kind:(Decls.IsDefinition Decls.Fixpoint)

@@ -43,6 +43,35 @@ let prod env sigma (name : string) (ty : EConstr.t) (body : Environ.env -> Evd.e
   let sigma, body = body inner_env in
   (sigma, mkProd ({ binder_name; binder_relevance = ERelevance.relevant }, ty, body))
 
+(**  [fix env sigma name rec_arg_idx ty body] makes a single fixpoint with the given parameters.
+    - [name] is the name of the fixpoint parameter.
+    - [rec_arg_idx] is the index of the (structurally) recursive argument, starting at [0].
+    - [ty] is the type of the fixpoint parameter.
+    - [body] is the body of the fixpoint, which has access to the extended environment.
+
+    For instance to build the fixpoint [fix add (n : nat) (m : nat) {struct_ m} : nat := ...]
+    one could use [fix env sigma "add" 1 '(nat -> nat -> nat) (fun env add -> ...)].
+*)
+let fix env sigma (name : string) (rec_arg_idx : int) (ty : EConstr.t)
+    (body : Environ.env -> Evd.evar_map * EConstr.t) : Evd.evar_map * EConstr.t =
+  let open EConstr in
+  let binder_name = Names.Name (Names.Id.of_string_soft name) in
+  let inner_env =
+    Environ.push_rel
+      (LocalAssum ({ binder_name; binder_relevance = Sorts.Relevant }, EConstr.to_constr sigma ty))
+      env
+  in
+  let sigma, body = body inner_env in
+  ( sigma
+  , mkFix
+      ( ([| rec_arg_idx |], 0)
+      , ( [| { binder_name = Name (Names.Id.of_string_soft name)
+             ; binder_relevance = ERelevance.relevant
+             }
+          |]
+        , [| ty |]
+        , [| body |] ) ) )
+
 (** [arr t1 t2] constructs the non-dependent product [t1 -> t2]. It takes care of lifting [t2]. *)
 let arr (t1 : EConstr.t) (t2 : EConstr.t) : EConstr.t = EConstr.mkArrowR t1 (EConstr.Vars.lift 1 t2)
 
@@ -175,14 +204,21 @@ end
       - AddMap adds rules to the database.
       - DeriveMap uses the rules in the database.
  *)
-let map_db : Names.GlobRef.t list ref = Summary.ref ~name:"Derivemap_explicit Rule Database" []
+let map_db : Names.GlobRef.t list ref = Summary.ref ~name:"Derivemap_de_bruijn Rule Database" []
 
 (** A small record to hold the parameters of the mapping function while
     we build its body. *)
 type params = { ind : Names.Ind.t; map : int; a : int; b : int; f : int; x : int }
 
+(** [lift_params n params] lifts the parameters [params] under [n] binders. *)
 let lift_params (n : int) (p : params) : params =
   { p with map = p.map + n; a = p.a + n; b = p.b + n; f = p.f + n; x = p.x + n }
+
+(** [replace_rel sigma a b t] replaces [Rel a] with [Rel b] in [t]. *)
+let rec replace_rel sigma (a : int) (b : int) (t : EConstr.t) : EConstr.t =
+  if EConstr.isRelN sigma a t
+  then EConstr.mkRel b
+  else EConstr.map_with_binders sigma (( + ) 1) (replace_rel sigma a) b t
 
 let build_arg env sigma (p : params) (arg : EConstr.t) (arg_ty : EConstr.t) :
     Evd.evar_map * EConstr.t =
@@ -195,9 +231,12 @@ let build_arg env sigma (p : params) (arg : EConstr.t) (arg_ty : EConstr.t) :
       ; f = mkRel p.f
       ; t = arg_ty
       ; (* [u] is equal to [t] with [a] replaced by [b]. *)
-        u = Vars.substnl [ mkRel p.b ] (p.a - 1) arg_ty
+        u = replace_rel sigma p.a p.b arg_ty
       }
   in
+  Log.printf "build arg : { a=%s ; b=%s ; f=%s ; t=%s ; u=%s }" (Log.show_econstr env sigma lp.a)
+    (Log.show_econstr env sigma lp.b) (Log.show_econstr env sigma lp.f)
+    (Log.show_econstr env sigma lp.t) (Log.show_econstr env sigma lp.u);
   (* Build a custom rule for [T = Ind A]. *)
   let map_rule : Lift.rule =
    fun env sigma lp ->
@@ -223,21 +262,34 @@ let build_arg env sigma (p : params) (arg : EConstr.t) (arg_ty : EConstr.t) :
 let build_branch env sigma (p : params) (ca : Inductiveops.constructor_summary)
     (cb : Inductiveops.constructor_summary) : Evd.evar_map * EConstr.t =
   let open EConstr in
-  (* Map the correct function over each argument. *)
+  let open Context.Rel.Declaration in
+  Log.printf "build branch";
+  List.iter (fun decl -> Log.printf "%s" (Log.show_econstr env sigma @@ get_type decl)) ca.cs_args;
+  (* Map the correct function over each argument.
+     We process the arguments from outermost to innermost. *)
   let rec loop env sigma i acc decls =
     match decls with
     | [] -> (sigma, acc)
     | decl :: decls ->
         let env = Environ.push_rel decl env in
         let sigma, new_arg =
-          build_arg env sigma (lift_params (i + 1) p) (mkRel 1) (get_type decl)
+          (* We call build_arg at a depth which is consistent with the local context of the environment,
+             and we lift the result to bring it at depth [n]. *)
+          build_arg env sigma
+            (lift_params (i + 1) p)
+            (mkRel 1)
+            (Vars.lift 1 @@ EConstr.of_constr @@ get_type decl)
         in
-        loop env sigma (i + 1) (Vars.lift (n - i) new_arg :: acc) decls
-    | _ -> Log.error "build_branch : length mismatch"
+        loop env sigma (i + 1) (Vars.lift (ca.cs_nargs - i - 1) new_arg :: acc) decls
   in
-  let sigma, mapped_args = loop env sigma 0 [] ca.cs_args in
-  (* Apply the constructor to the arguments. *)
-  let body = mkApp (mkConstructU cb.cs_cstr, Array.of_list (mkVar p.b :: mapped_args)) in
+  let sigma, mapped_args =
+    loop env sigma 0 [] (List.rev @@ EConstr.to_rel_context sigma ca.cs_args)
+  in
+  (* Apply the constructor to the arguments. Careful about the order of the arguments. *)
+  let body =
+    mkApp
+      (mkConstructU cb.cs_cstr, Array.of_list (mkRel (ca.cs_nargs + p.b) :: List.rev mapped_args))
+  in
   (* Bind the constructor arguments. *)
   let branch =
     EConstr.it_mkLambda body
@@ -258,14 +310,25 @@ let build_map env sigma (ind : Names.inductive) : Evd.evar_map * EConstr.t =
   (* Make the type of the recursive mapping function. *)
   let sigma, ta = fresh_type sigma in
   let sigma, tb = fresh_type sigma in
-  let map_ty =
-    prod "a" ta @@ prod "b" tb
-    @@ arr
-         (arr (mkRel 2) (mkRel 1))
-         (arr (apply_ind env ind @@ mkRel 2) (apply_ind env ind @@ mkRel 1))
+  let sigma, map_ty =
+    prod env sigma "a" ta @@ fun env ->
+    prod env sigma "b" tb @@ fun env ->
+    ( sigma
+    , arr
+        (arr (mkRel 2) (mkRel 1))
+        (arr (apply_ind env ind @@ mkRel 2) (apply_ind env ind @@ mkRel 1)) )
   in
+  (* Abstract over the input parameters. *)
+  fix env sigma "map" 3 map_ty @@ fun env ->
+  lambda env sigma "a" ta @@ fun env ->
+  lambda env sigma "b" tb @@ fun env ->
+  lambda env sigma "f" (arr (mkRel 2) (mkRel 1)) @@ fun env ->
+  lambda env sigma "x" (apply_ind env ind @@ mkRel 3) @@ fun env ->
   (* Construct the case return clause. *)
-  let case_return = lambda "_" (apply_ind env ind @@ mkRel 4) (apply_ind env ind @@ mkRel 4) in
+  let sigma, case_return =
+    lambda env sigma "_" (apply_ind env ind @@ mkRel 4) @@ fun env ->
+    (sigma, apply_ind env ind @@ mkRel 4)
+  in
   (* Construct the case branches. *)
   let rec loop sigma acc ctrs_a ctrs_b =
     match (ctrs_a, ctrs_b) with
@@ -279,18 +342,11 @@ let build_map env sigma (ind : Names.inductive) : Evd.evar_map * EConstr.t =
   in
   let sigma, branches = loop sigma [] (constructors env @@ mkRel 4) (constructors env @@ mkRel 3) in
   (* Finally construct the case expression. *)
-  let case =
-    Inductiveops.simple_make_case_or_project env sigma
+  ( sigma
+  , Inductiveops.simple_make_case_or_project env sigma
       (Inductiveops.make_case_info env ind Constr.RegularStyle)
       (case_return, ERelevance.relevant)
-      Constr.NoInvert (mkRel 1) branches
-  in
-  (* Abstract over the input variables. *)
-  (*namedFix env sigma "map" 3 map_ty @@ fun env sigma map ->*)
-  ( sigma
-  , lambda "a" ta @@ lambda "b" tb
-    @@ lambda "f" (arr (mkRel 2) (mkRel 1))
-    @@ lambda "x" (apply_ind env ind @@ mkRel 3) case )
+      Constr.NoInvert (mkRel 1) branches )
 
 (** [DeriveMap] command entry point. *)
 let derive (ind_name : Libnames.qualid) : unit =
@@ -314,9 +370,7 @@ let derive (ind_name : Libnames.qualid) : unit =
   let basename =
     Names.Id.of_string_soft @@ (Names.Id.to_string @@ Libnames.qualid_basename ind_name) ^ "_map"
   in
-  (* TODO : ensure it is fresh. *)
-  let name = basename in
-  (*let name = (*Namegen.next_global_ident_away basename @@ Environ *) in*)
+  let name = Namegen.next_global_ident_away basename Names.Id.Set.empty in
   (* Add the function to the global environment. *)
   let info =
     Declare.Info.make ~kind:(Decls.IsDefinition Decls.Fixpoint)

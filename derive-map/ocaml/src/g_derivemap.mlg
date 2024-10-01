@@ -2,7 +2,7 @@ DECLARE PLUGIN "coq-metaprogramming.derivemap.plugin"
 
 { 
   open Stdarg
-  module Derivemap = Derivemap_locally_nameless
+  module Derivemap = Derivemap_de_bruijn
 }
 
 (* Declare the "AddMap" Coq command. *)
