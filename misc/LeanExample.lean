@@ -1,3 +1,5 @@
+-- This is a small example I wrote to teach myself to do metaprogramming in Lean.
+
 import Lean
 open Lean Meta Elab
 
@@ -26,7 +28,6 @@ def Mylist.map (f : α → β) (x : Mylist α) : Mylist β :=
 --    4.1 the nil branch : `fun b => .nil b`
 --    4.2 the cons branch : `fun x1 x2 => .cons (f x1) (f x2)`
 
----------------------------------------------------------------------------------------
 -- We now want to define `Mylist.map` using `Expr`s.
 -- To do so we will work in the `MetaM` monad, which allows us to use the global environment
 -- and use metavariables (for unification/typechecking).
