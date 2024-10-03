@@ -1,18 +1,3 @@
-# Lean Questions
-
--   Inductives 
-    1. How are they represented in Expr ?
-    2. How do you translate them from surface syntax to Expr ?
-    
--   Names
-
--   Universes
-    1. Global universe levels ? --> If yes, does Lean use typical ambiguity ?
-    2. Is there sort polymorphism ?
-    FOR YANNICK : how useful is it to have both universe polymorphism and cumulativity ? I feel like both tackle the same issue (reusing a definition at several universe levels)
-    
--   Defining commands & tactics the easy way (elaboration/macro/syntax bullshit)
-
 # Thoughts on derive-map 
 
 Elpi : by far the best (HOAS + relational programming = both concise and easy to use).

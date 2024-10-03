@@ -1,10 +1,12 @@
 # Description 
 
-This project contains several example Coq tactics and commands written in Elpi, Ltac2, MetaCoq and Ocaml.
+This project contains several example tactics and commands written in Coq (Elpi, Ltac2, MetaCoq and Ocaml) and Lean.
+-   DeriveMap : defines a command `DeriveMap myind` which derives a mapping function on the inductive `myind`.
+    It assumes `myind` has exactly one uniform parameter, and builds a function of type `forall A B, (A -> B) -> myind A -> myind B`.
 
 # Building and running
 
-Use the Makefile : `make` and `make install`
+Use the Makefile : `make` and `make install`.
 
 # Coq Setup
 
