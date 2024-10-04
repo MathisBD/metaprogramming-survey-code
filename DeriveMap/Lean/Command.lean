@@ -1,10 +1,23 @@
 import Lean
-import Init.Control
+import DeriveMap.Lean.NameDb
 open Lean Meta Elab
+
+--inductive Tree (A : Type u) where
+--  | node : A → List (Tree A) → Tree A
+--
+--unsafe def Tree.map {α β} (f : α → β) : Tree α → Tree β
+--  | node v ts => node (f v) (List.map (fun t => Tree.map f t) ts)
+--
+--set_option pp.all true in
+--#print Tree.map
+--
+--#print List.casesOn
+--
+--#print List.brecOn
 
 inductive Mylist (A : Type u) : Type u :=
   | nil : Bool -> Mylist A
-  | cons : A → Mylist A → Mylist A
+  | cons : A → A → Mylist A
 
 /-- `freshConstant c` returns the (universe polymorphic) constant `c` applied
     to the right number of fresh universe levels.  -/
@@ -90,9 +103,9 @@ def buildBranch (A B f : Expr) (ctr : ConstructorVal) : MetaM Expr := do
     -- Abstract with respect to the arguments.
     mkLambdaFVars args body
 
--- Build the mapping function : we return the function as an `Expr`,
--- and since the mapping function is universe polymorphic we also return
--- the names of its universe parameters.
+/-- Build the mapping function : we return the function as an `Expr`,
+    and since the mapping function is universe polymorphic we also return
+    the names of its universe parameters. -/
 def buildMap (ind : InductiveVal) : MetaM (List Name × Expr) := do
   -- Create some universe level parameters.
   let u0 := `u0
@@ -116,7 +129,7 @@ def buildMap (ind : InductiveVal) : MetaM (List Name × Expr) := do
     -- Return the level parameters and the resulting function.
     return ⟨[u0, u1], res⟩
 
--- Code to declare the function.
+/-- `DeriveMap` command entry point. -/
 def deriveMap (ind_name : Name) : MetaM Unit := do
   -- Resolve the inductive.
   let ind ← getConstInfoInduct ind_name
@@ -125,15 +138,13 @@ def deriveMap (ind_name : Name) : MetaM Unit := do
   -- Typecheck the function to instantiate any remaining metavariables & level metavariables.
   check body
   let body ← instantiateMVars body
-  -- Choose a name for the mapping function, ensuring freshness.
+  -- Choose a name for the mapping function.
+  -- TODO : ensure freshness (while maintaining a usable name).
   let map_name := Name.str ind_name "map"
   -- Add the function to the global environment.
-  let defVal ← mkDefinitionValInferrringUnsafe
-    map_name
-    lvls
-    (← inferType body)
-    body
-    (ReducibilityHints.regular 0)
+  let defVal ←
+    mkDefinitionValInferrringUnsafe
+      map_name lvls (← inferType body) body (ReducibilityHints.regular 0)
   addDecl $ Declaration.defnDecl defVal
   IO.println s!"Declared mapping function for `{ind_name} under the name `{map_name}"
 
@@ -146,3 +157,16 @@ elab "#derive_map" ind_name:name : command =>
 #derive_map `Mylist
 
 #print Mylist.map
+
+def foo : TermElabM Expr := do
+  let stx ← `(term|
+    let rec myListMap {α β} (f : α → β) (xs : List α) : List β :=
+      match xs with
+      | [] => []
+      | x :: xs => f x :: myListMap f xs
+    myListMap)
+  instantiateMVars =<< Term.elabTerm stx none
+
+#eval do
+  let e ← foo
+  IO.println s!"{ ← ppExpr e }"
