@@ -1,3 +1,13 @@
+# Questions for the experts
+
+1. Unification in the presence of universe polymorphism.
+Example : recognize "mapping functions". In Lean syntax :
+  List.map.{u1, u2} : forall (A : Type u1) (B : Type u2), (A -> B) -> List.{u1} A -> List.{u2} B
+general pattern : 
+  forall (A : Type u1) (B : Type u2), (A -> B) -> ?T A -> ?T B
+problem : this does not unify (because it requires List.{u1} = List.{u2})
+The nice way to solve this would be to allow metavariables to depend on universe levels : ?T.{u}
+
 # Thoughts on derive-map 
 
 Elpi : by far the best (HOAS + relational programming = both concise and easy to use).
