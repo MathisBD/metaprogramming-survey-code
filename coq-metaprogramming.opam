@@ -8,7 +8,8 @@ bug-reports: "https://github.com/MathisBD/coq-metaprogramming/issues"
 depends: [
   "dune" {>= "3.16"}
   "coq" {= "8.20.0"}
-  "coq-elpi" {>= "2.2.3"}
+  "coq-elpi"
+  "coq-metacoq"
   "odoc" {with-doc}
 ]
 build: [

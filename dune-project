@@ -20,5 +20,5 @@
  (depends
   (coq
    (= 8.20.0))
-  (coq-elpi
-   (>= 2.2.3))))
+  coq-elpi
+  coq-metacoq))
