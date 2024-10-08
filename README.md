@@ -14,7 +14,7 @@ Setup a local opam switch with coq :
 ```
 opam switch create . 5.2.0 --repos default,coq-released=https://coq.inria.fr/opam/released
 ```
-and select yes (Y) when asked to create as a new package.
+and select yes (Y) when asked to create as a new package. Metacoq takes a while to install.
 
 Optionally install development packages. For instance if using VSCode :
 ```
