@@ -2,22 +2,9 @@ import Lean
 import DeriveMap.Lean.NameDb
 open Lean Meta Elab
 
---inductive Tree (A : Type u) where
---  | node : A → List (Tree A) → Tree A
---
---unsafe def Tree.map {α β} (f : α → β) : Tree α → Tree β
---  | node v ts => node (f v) (List.map (fun t => Tree.map f t) ts)
---
---set_option pp.all true in
---#print Tree.map
---
---#print List.casesOn
---
---#print List.brecOn
-
-inductive Mylist (A : Type u) : Type u :=
-  | nil : Bool -> Mylist A
-  | cons : List (List A) → Mylist A
+/- --------------------------------------------------------------------------------------/
+/- Utilities. -/
+/- --------------------------------------------------------------------------------------/
 
 /-- `freshConstant c` returns the (universe polymorphic) constant `c` applied
     to the right number of fresh universe levels.  -/
@@ -31,6 +18,9 @@ partial def subterm (x t : Expr) : Bool :=
   then true
   else Id.run $ Expr.foldlM (fun res subt => return res || subterm x subt) false t
 
+/- --------------------------------------------------------------------------------------/
+/- Lifting mapping functions. -/
+/- --------------------------------------------------------------------------------------/
 namespace Lift
 
 /-- A lifting problem consists in lifting a function `f : A → B` to a function `T → U`.
@@ -108,7 +98,6 @@ def destruct_map (f : Expr) : MetaM (Option Name) := do
       mkForallFVars #[A, B] arrs
   -- Unify the type of f with the pattern.
   let ty ← inferType f
-  IO.println s!"Type of f : { ty }\nPattern : { pat }"
   if ← isDefEq ty pat
   then do
     let I1 ← instantiateMVars I1
@@ -118,30 +107,19 @@ def destruct_map (f : Expr) : MetaM (Option Name) := do
     | .const I1_name _, .const I2_name _ =>
       return if I1_name = I2_name then some I1_name else none
     | _, _ => return none
-    --IO.println s!"Success : {T}"
-    --IO.println s!"Assignments :"
-    --IO.println s!"{uT} := {← instantiateLevelMVars uT}"
-    --IO.println s!"{uA} := {← instantiateLevelMVars uA}"
-    --IO.println s!"{uB} := {← instantiateLevelMVars uB}"
-    --IO.println s!"{T} := {← instantiateMVars T}"
-    --IO.println s!"ty := {← instantiateMVars ty}"
   else return none
 
-
-def custom_rule (map_name : Name) (rec_rule : Rule) : Rule := fun lp => do
+def custom_rule (rec_rule : Rule) (map_name : Name) : Rule := fun lp => do
   IO.println s!"RULE {map_name} ON { ← ppExpr lp.T }"
   -- Extract the type former T.
   let map ← freshConstant =<< getConstInfo map_name
   let tf := Option.get! (← destruct_map map)
-  IO.println s!"Type former : { tf }"
   -- Create unification variables alpha and beta.
   let uAlpha ← mkFreshLevelMVar
   let uBeta ← mkFreshLevelMVar
   let alpha ← mkFreshExprMVar $ some $ .sort uAlpha
   let beta ← mkFreshExprMVar $ some $ .sort uBeta
   -- Unify T =?= tf alpha and U =?= tf beta.
-  IO.println s!"lp.T : { ← ppExpr lp.T }"
-  IO.println s!"lp.U : { ← ppExpr lp.U }"
   let b1 ← isDefEq lp.T $ .app (← freshConstant =<< getConstInfo tf) alpha
   let b2 ← isDefEq lp.U $ .app (← freshConstant =<< getConstInfo tf) beta
   if b1 && b2 then do
@@ -164,11 +142,13 @@ partial def fix (f : Rule → Rule) : Rule :=
 
 end Lift
 
+/- --------------------------------------------------------------------------------------/
+/- Actual #derive_map and #add_map implementation. -/
+/- --------------------------------------------------------------------------------------/
 
 def buildBranch (u0 u1 : Level) (A B f : Expr) (ctr : ConstructorVal) : MetaM Expr := do
   -- Get the type of the constructor.
   let ctr_ty ← instantiateTypeLevelParams (ConstantInfo.ctorInfo ctr) [u0]
-  IO.println s!"Ctr type : { ← ppExpr ctr_ty}"
   -- Get the arguments of the constructor applied to A.
   forallTelescope (← instantiateForall ctr_ty #[A]) fun args _ => do
     -- Map over each argument of the constructor.
@@ -179,9 +159,10 @@ def buildBranch (u0 u1 : Level) (A B f : Expr) (ctr : ConstructorVal) : MetaM Ex
       let U := Expr.replaceLevel (fun u => if u == u0 then some u1 else none) $ Expr.replaceFVar T A B
       let lp := { A, B, f, T, U : Lift.Problem }
       -- Construct a lifting rule.
+      let map_funcs ← NameDb.get
       let rule :=
         Lift.fix fun rec_rule =>
-          Lift.sequence [Lift.rule_apply, Lift.rule_id, Lift.custom_rule ``List.map rec_rule]
+          Lift.sequence $ Lift.rule_apply :: Lift.rule_id :: List.map (Lift.custom_rule rec_rule) map_funcs
       -- Solve the lifting problem.
       match ← rule lp with
       | none => throwError s!"Could not lift function of type {← ppExpr A} → {← ppExpr B} on argument of type {← ppExpr T}"
@@ -190,10 +171,7 @@ def buildBranch (u0 u1 : Level) (A B f : Expr) (ctr : ConstructorVal) : MetaM Ex
     let fresh_ctr ← freshConstant $ .ctorInfo ctr
     let body := mkAppN fresh_ctr $ Array.append #[B] mapped_args
     -- Abstract with respect to the arguments.
-    let branch ← instantiateMVars =<< mkLambdaFVars args body
-    IO.println s!"BRANCH : { ← ppExpr branch }"
-    check branch
-    return branch
+    instantiateMVars =<< mkLambdaFVars args body
 
 /-- Build the mapping function : we return the function as an `Expr`,
     and since the mapping function is universe polymorphic we also return
@@ -237,7 +215,6 @@ def deriveMap (ind_name : Name) : MetaM Unit := do
   check body
   let body ← instantiateMVars body
   -- Choose a name for the mapping function.
-  -- TODO : ensure freshness (while maintaining a usable name).
   let map_name := Name.str ind_name "map"
   -- Add the function to the global environment.
   let defVal ←
@@ -251,28 +228,31 @@ def deriveMap (ind_name : Name) : MetaM Unit := do
 elab "#derive_map" ind_name:name : command =>
   Command.liftTermElabM $ deriveMap ind_name.getName
 
---def Mylist.map {α β} (f : α → β) (xs : Mylist α) : Mylist β :=
---  match xs with
---  | .nil b => .nil b
---  | .cons xss => .cons (List.map (List.map f) xss)
+/-- Add a mapping function to the database. -/
+elab "#add_map" func_name:name : command =>
+  Command.liftTermElabM do
+    -- Check the function is a mapping function.
+    let func ← getConstInfo func_name.getName
+    match ← Lift.destruct_map $ ← freshConstant func with
+    -- This is not a mapping function : fail.
+    | none => throwError s!"Provided constant is not a mapping function."
+    -- Add the function to the database.
+    | some _ => NameDb.extend func_name.getName
 
-set_option pp.all true
---#print Mylist.map
+/- --------------------------------------------------------------------------------------/
+/- Examples. -/
+/- --------------------------------------------------------------------------------------/
 
--- Actually declare the function.
+inductive Double (A : Type u) : Type u :=
+  | double : A -> A -> Double A
+
+#derive_map `Double
+#add_map `Double.map
+
+inductive Mylist (A : Type u) : Type u :=
+  | nil : Bool → Mylist A
+  | duh : A → A → Mylist A
+  | cons : A → List A → Bool → Double (List A) → Mylist A
+
+#add_map `List.map
 #derive_map `Mylist
-
-#print Mylist.map
-
-def foo : TermElabM Expr := do
-  let stx ← `(term|
-    let rec myListMap {α β} (f : α → β) (xs : List α) : List β :=
-      match xs with
-      | [] => []
-      | x :: xs => f x :: myListMap f xs
-    myListMap)
-  instantiateMVars =<< Term.elabTerm stx none
-
-#eval do
-  let e ← foo
-  IO.println s!"{ ← ppExpr e }"
