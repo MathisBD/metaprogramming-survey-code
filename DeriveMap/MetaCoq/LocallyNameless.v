@@ -192,3 +192,15 @@ Definition mk_lambda (name : aname) (ty : term) (ctx : NamedContext.t) (mk_body 
   with_local_decl {| decl_name := name ; decl_body := None ; decl_type := ty |} ctx $ fun ctx id => 
     let body := mk_body ctx id in
     tLambda name ty $ abstract id body.
+
+
+(**Definition mk_case _ _ (mk_pred : ...) (mk_branch : NamedContext.t -> ctr -> list id -> term)*)
+
+
+(** fun x : ty => body 
+ 
+fresh id 
+>> k (push id ty ctx) id body
+*)
+(**Definition dest_lambda (id, ty, body) (ctx : NamedContext.t) (k : NamedContext.t -> list id -> term (* body *) -> T) -> T *)
+

@@ -8,6 +8,9 @@ general pattern :
 problem : this does not unify (because it requires List.{u1} = List.{u2})
 The nice way to solve this would be to allow metavariables to depend on universe levels : ?T.{u}
 
+2. For Yannick : in metacoq, 
+   - how to get the global environment ?
+
 # Thoughts on derive-map 
 
 Elpi : by far the best (HOAS + relational programming = both concise and easy to use).
