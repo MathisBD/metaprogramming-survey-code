@@ -50,7 +50,7 @@ let prod env sigma (name : string) (ty : EConstr.t) (body : Environ.env -> Evd.e
     - [body] is the body of the fixpoint, which has access to the extended environment.
 
     For instance to build the fixpoint [fix add (n : nat) (m : nat) {struct_ m} : nat := ...]
-    one could use [fix env sigma "add" 1 '(nat -> nat -> nat) (fun env add -> ...)].
+    one could use [fix env sigma "add" 1 '(nat -> nat -> nat) (fun env -> ...)].
 *)
 let fix env sigma (name : string) (rec_arg_idx : int) (ty : EConstr.t)
     (body : Environ.env -> Evd.evar_map * EConstr.t) : Evd.evar_map * EConstr.t =
@@ -264,7 +264,6 @@ let build_branch env sigma (p : params) (ca : Inductiveops.constructor_summary)
   let open EConstr in
   let open Context.Rel.Declaration in
   Log.printf "build branch";
-  List.iter (fun decl -> Log.printf "%s" (Log.show_econstr env sigma @@ get_type decl)) ca.cs_args;
   (* Map the correct function over each argument.
      We process the arguments from outermost to innermost. *)
   let rec loop env sigma i acc decls =

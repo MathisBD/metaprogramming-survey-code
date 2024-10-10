@@ -8,8 +8,8 @@ general pattern :
 problem : this does not unify (because it requires List.{u1} = List.{u2})
 The nice way to solve this would be to allow metavariables to depend on universe levels : ?T.{u}
 
-2. For Yannick : in metacoq, 
-   - how to get the global environment ?
+2. For Yannick : in metacoq
+  - "open recursors" for [term] : are they in metacoq ? Should they be added ?
 
 # Thoughts on derive-map 
 
