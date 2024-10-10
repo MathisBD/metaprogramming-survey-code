@@ -76,7 +76,7 @@ let fix env sigma (name : string) (rec_arg_idx : int) (ty : EConstr.t)
 let arr (t1 : EConstr.t) (t2 : EConstr.t) : EConstr.t = EConstr.mkArrowR t1 (EConstr.Vars.lift 1 t2)
 
 (** [subterm x t] checks whether [x] occurs in [t], modulo alpha equivalence.
-      It takes time [O(size(x) * size(t))]. *)
+    It takes time [O(size(x) * size(t))]. *)
 let rec subterm sigma (x : EConstr.t) (t : EConstr.t) : bool =
   EConstr.fold sigma (fun b subt -> b || subterm sigma x subt) (EConstr.eq_constr sigma x t) t
 

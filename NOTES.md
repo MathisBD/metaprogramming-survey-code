@@ -11,6 +11,10 @@ The nice way to solve this would be to allow metavariables to depend on universe
 2. For Yannick : in metacoq
   - "open recursors" for [term] : are they in metacoq ? Should they be added ?
 
+# Bugs
+
+1. MetaCoq : noccur_between is incorrect. In the tRel case it should be || instead of &&.
+
 # Thoughts on derive-map 
 
 Elpi : by far the best (HOAS + relational programming = both concise and easy to use).

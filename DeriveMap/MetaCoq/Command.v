@@ -1,5 +1,7 @@
 From MetaCoq.Utils Require Import utils.
-From MetaCoq.Template Require Import All.
+From MetaCoq.Template Require Import All Pretty.
+From MetaCoq Require Import Checker.
+From DeriveMap.MetaCoq Require Import Utils.
 Require String.
 
 Import MCMonadNotation.
@@ -58,52 +60,131 @@ Definition mk_fix {M : Type -> Type} {_ : Monad M} (ctx : context)
 (* TODO show to Yannick : removing [0] in the last line gives a cryptic error message.
    This happens all the time when using monads in Coq. *)
 
+(** [conv env ctx t1 t2] checks whether [t1] and [t2] are convertible in local context [ctx]. *)
+Definition conv env ctx (t1 : term) (t2 : term) : bool :=
+  match @check_conv config.default_checker_flags default_fuel env init_graph ctx t1 t2 with 
+  | Checked _ => true 
+  | TypeError _ => false 
+  end.
+
+(** [alpha_eq t1 t2] checks if [t1] and [t2] are equal modulo alpha conversion. *)
+Definition alpha_eq (t1 : term) (t2 : term) : bool :=
+  @eq_term config.default_checker_flags init_graph t1 t2.
+
+(** Pretty print a term to a string. *)  
+Definition pp_term (env : global_env) (ctx : context) (t : term) : string :=
+  let decl_ident d : ident :=
+    match d.(decl_name).(binder_name) with 
+    | nNamed n => n 
+    | nAnon => "_"
+    end
+  in
+  print_term (env, Monomorphic_ctx) (List.map decl_ident ctx) true t.
+
+(** This is the corrected version of [noccur_between].
+    [correct_noccur_between k n t] checks that [t] does not contain any de Bruijn index
+    in the range [k ... k + n - 1]. *)
+Fixpoint correct_noccur_between (k n : nat) (t : term) {struct t} : bool :=
+  match t with
+  | tRel i => (i <? k) || (k + n <=? i)
+  | tEvar _ args => forallb (correct_noccur_between k n) args
+  | tCast c _ t0 => correct_noccur_between k n c && correct_noccur_between k n t0
+  | tProd _ T M | tLambda _ T M =>
+	  correct_noccur_between k n T && correct_noccur_between (S k) n M
+  | tLetIn _ b t0 b' =>
+      correct_noccur_between k n b && correct_noccur_between k n t0 &&
+      correct_noccur_between (S k) n b'
+  | tApp u v => correct_noccur_between k n u && forallb (correct_noccur_between k n) v
+  | tCase _ p c brs =>
+      let k' := #|pcontext p| + k in
+      let p' :=
+        test_predicate (fun _ : Instance.t => true) 
+          (correct_noccur_between k n) (correct_noccur_between k' n) p in
+      let brs' := test_branches_k (fun k0 : nat => correct_noccur_between k0 n) k brs
+        in
+      p' && correct_noccur_between k n c && brs'
+  | tProj _ c => correct_noccur_between k n c
+  | tFix mfix _ | tCoFix mfix _ =>
+      let k' := #|mfix| + k in
+      forallb (test_def (correct_noccur_between k n) (correct_noccur_between k' n)) mfix
+  | tArray _ arr def ty =>
+      forallb (correct_noccur_between k n) arr && correct_noccur_between k n def &&
+      correct_noccur_between k n ty
+  | _ => true
+  end.
+
+(** [cstr_args_at cstr ind params] gives the context for the arguments of the constructor [cstr],
+    substituting [ind] for the inductive and [params] for the parameters of the constructor. *)
+Definition cstr_args_at (cstr : constructor_body) (ind : term) (params : list term) : context :=
+  subst_context (List.rev (ind :: params)) 0 $ cstr_args cstr.
+
+
+(** [monad_mapi f l] is the same as [monad_map f l] except the function [f]
+    is fed the index of each argument. *)
+Definition monad_mapi (T : Type -> Type) (M : Monad T) (A B : Type) (f : nat -> A -> T B) (l : list A) :=
+  monad_map (fun '(i, a) => f i a) $ mapi pair l.
+
+Arguments monad_mapi {T}%_function_scope {M} {A B}%_type_scope f%_function_scope l%_list_scope.
+    
+
 (****************************************************************************)
 (** DeriveMap and AddMap commands. *)
 (****************************************************************************)
-
-MetaCoq Test Quote (match [1] with [] => [] | hd :: tl => tl end).
-
-Print constructor_body.
-
-Section Commands.
-
-Context (env : global_env).
 
 Record params := mk_params { ind : inductive ; map : nat ; A : nat ; B : nat ; f : nat ; x : nat }.
 
 Definition lift_params (n : nat) (p : params) : params :=
   {| ind := p.(ind) ; map := p.(map) + n ; A := p.(A) + n ; B := p.(B) + n ; f := p.(f) + n ; x := p.(x) + n |}.
 
-Definition build_arg (ctx : context) (p : params) (arg : term) (arg_ty : term) : term :=
-  arg.
+Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : term) : TM term :=
+  tmPrint "ARG" ;;
+  tmPrint =<< tmEval cbv p ;;
+  tmPrint =<< tmEval cbv arg ;;
+  tmPrint =<< tmEval cbv arg_ty ;;
+  if conv env ctx arg_ty $ tRel p.(A) then 
+    (* Rule APPLY. *)
+    tmPrint "APPLY" ;;
+    tmReturn $ tApp (tRel p.(f)) [arg]
+  else if correct_noccur_between p.(A) 1 arg_ty then 
+    (* Rule ID. *)
+    tmPrint "ID" ;;
+    tmReturn $ arg
+  else if conv env ctx arg_ty $ tApp (tInd p.(ind) []) [tRel p.(A)] then
+    (* Rule MAP. *)
+    tmPrint "MAP" ;; 
+    tmReturn $ tApp (tRel p.(map)) [tRel p.(A); tRel p.(B); tRel p.(f); arg]
+  else 
+    (* No applicable rule. *)
+    tmFail ("No applicable rule for " ++ pp_term env ctx arg_ty)%bs.
 
-Definition build_branch (ctx : context) (p : params) (ctor : constructor_body) : TM (branch term) :=
-  tmPrint =<< tmEval cbv ctor.(cstr_args) ;;
+Definition build_branch env (ctx : context) (p : params) (ctor_idx : nat) (ctor : constructor_body) : TM (branch term) :=
+  tmPrint "BRANCH" ;;
   (* Get the context of the constructor. *)
   let bcontext := List.map decl_name ctor.(cstr_args) in 
   let n := List.length bcontext in
+  (* Get the types of the arguments of the constructor at type [A]. *)
+  let arg_tys := cstr_args_at ctor (tInd p.(ind) []) [tRel p.(A)] in
+  tmPrint =<< tmEval cbv arg_tys ;; 
   (* Process the arguments one by one, starting from the outermost one. *)
   let loop := fix loop ctx i acc decls :=
     match decls with 
-    | [] => List.rev acc 
+    | [] => tmReturn $ List.rev acc 
     | d :: decls => 
       let ctx := d :: ctx in
       (* We call build_arg at a depth which is consistent with the local context of the environment,
          and we lift the result to bring it at depth [n]. *)
-      let mapped_arg := build_arg ctx (lift_params (i + 1) p) (tRel 0) (lift0 1 d.(decl_type)) in
+      mlet mapped_arg <- build_arg env ctx (lift_params (i + 1) p) (tRel 0) (lift0 1 d.(decl_type)) ;;
       loop ctx (i + 1) (lift0 (n - i - 1) mapped_arg :: acc) decls 
     end
   in 
   (* The mapped arguments are at depth [n]. *)
-  let mapped_args := loop ctx 0 [] $ List.rev ctor.(cstr_args) in
+  mlet mapped_args <- loop ctx 0 [] (List.rev arg_tys) ;;
   (* Apply the constuctor to the mapped arguments. *)
-  let bbody := tApp (tInd p.(ind) []) $ tRel (p.(B) + n) :: mapped_args in
+  let bbody := tApp (tConstruct p.(ind) ctor_idx []) $ tRel (p.(B) + n) :: mapped_args in
   (* Assemble the branch's context and body. *)
   tmReturn $ mk_branch bcontext bbody.
 
-#[using="All"]
-Definition build_map (ctx : context) (ind : inductive) (ind_body : one_inductive_body) : TM term := 
+Definition build_map env (ctx : context) (ind : inductive) (ind_body : one_inductive_body) : TM term := 
   (* Create some universes for the types of A and B. *)
   mlet uA <- tmQuoteUniverse ;;
   mlet uB <- tmQuoteUniverse ;;
@@ -128,16 +209,14 @@ Definition build_map (ctx : context) (ind : inductive) (ind_body : one_inductive
   (* Construct the case predicate. *)
   let pred := 
     {| puinst := []
-    ;  pparams := [tRel 3]
+    ;  pparams := [tRel p.(A)]
     ;  pcontext := [{| binder_name := nNamed "x" ; binder_relevance := Relevant |}]
-    ;  preturn := tApp (tInd ind []) [tRel 2] |}
+    ;  preturn := tApp (tInd ind []) [tRel $ p.(B) + 1 ] |}
   in
   (* Construct the branches. *)
-  mlet branches <- monad_map (build_branch ctx p) ind_body.(ind_ctors) ;;
+  mlet branches <- monad_mapi (build_branch env ctx p) ind_body.(ind_ctors) ;;
   (* Finally make the case expression. *)
-  tmReturn (tCase ci pred (tRel 0) branches).
-
-End Commands.
+  tmReturn (tCase ci pred (tRel p.(x)) branches).
 
 (** DeriveMap command entry point. *)
 Definition derive_map (ind_name : qualid) : TM unit := 
@@ -172,8 +251,19 @@ Definition derive_map (ind_name : qualid) : TM unit :=
   tmMkDefinition (ind_name ++ "_map")%bs func ;;
   tmReturn tt.
 
-MetaCoq Run (derive_map "list").
+Inductive double A := 
+  | Dnil : bool -> double A
+  | Double : double A -> A -> double A.
 
-Print eq.
+(*Definition double_map :=
+  fun (A B : Type) (f : A -> B) (x : double A) =>
+  match x with 
+  | Double x1 x2 => @Double B (f x1) (f x2)
+  end.*)
+
+
+MetaCoq Run (derive_map "double").
+
+Print double_map.
 
 Print tmPrint.
