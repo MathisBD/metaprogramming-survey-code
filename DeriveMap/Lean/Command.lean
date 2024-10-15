@@ -243,18 +243,18 @@ elab "#add_map" func_name:name : command =>
 /- Examples. -/
 /- --------------------------------------------------------------------------------------/
 
-inductive Double (A : Type u) : Type u :=
-  | double : A -> A -> Double A
-
-#derive_map `Double
-#add_map `Double.map
-
-#print Double.map
-
-inductive Mylist (A : Type u) : Type u :=
-  | nil : Bool → Mylist A
-  | duh : A → A → Mylist A
-  | cons : A → List A → Bool → Double (List A) → Mylist A
-
-#add_map `List.map
-#derive_map `Mylist
+--inductive Double (A : Type u) : Type u :=
+--  | double : A -> A -> Double A
+--
+--#derive_map `Double
+--#add_map `Double.map
+--
+--#print Double.map
+--
+--inductive Mylist (A : Type u) : Type u :=
+--  | nil : Bool → Mylist A
+--  | duh : A → A → Mylist A
+--  | cons : A → List A → Bool → Double (List A) → Mylist A
+--
+--#add_map `List.map
+--#derive_map `Mylist

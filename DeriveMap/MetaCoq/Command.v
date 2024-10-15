@@ -2,6 +2,7 @@ From MetaCoq.Utils Require Import utils.
 From MetaCoq.Template Require Import All Pretty.
 From MetaCoq Require Import Checker.
 From DeriveMap.MetaCoq Require Import Utils.
+From ReductionEffect Require Import PrintingEffect.
 Require String.
 
 Import MCMonadNotation.
@@ -63,12 +64,6 @@ Definition mk_fix {M : Type -> Type} {_ : Monad M} (ctx : context)
 (* TODO show to Yannick : removing [0] in the last line gives a cryptic error message.
    This happens all the time when using monads in Coq. *)
 
-(** [conv env ctx t1 t2] checks whether [t1] and [t2] are convertible in local context [ctx]. *)
-Definition conv env ctx (t1 t2 : term) : bool :=
-  match check_conv env init_graph ctx t1 t2 with 
-  | Checked _ => true 
-  | TypeError _ => false 
-  end.
 
 (** Pretty print a term to a string. *)  
 Definition pp_term (env : global_env) (ctx : context) (t : term) : string :=
@@ -162,17 +157,19 @@ Definition rule := global_env -> context -> problem -> option term.
     In this case we solve with [f' = f] *)
 Definition apply_rule : rule := 
   fun env ctx lp =>
-    if conv env ctx lp.(lp_A) lp.(lp_T)
-    then Some lp.(lp_f)
-    else None.
+    let () := print ("RULE apply ON", pp_term env ctx lp.(lp_T)) in
+    if check_conv env init_graph ctx lp.(lp_A) lp.(lp_T)
+    then let () := print ">>SUCCESS" in Some lp.(lp_f)
+    else let () := print ">>FAIL" in None.
 
 (** Basic lifting rule when [A] does not occur in [T].
     In this case we solve with [f' x = x]. *)
 Definition id_rule : rule :=
   fun env ctx lp =>
+    let () := print ("RULE id ON", pp_term env ctx lp.(lp_T)) in
     if subterm lp.(lp_A) lp.(lp_T)
-    then None 
-    else Some $ mk_lambda ctx "x" lp.(lp_T) (fun ctx => tRel 0).
+    then let () := print ">>FAIL" in None 
+    else let () := print ">>SUCCESS" in Some $ mk_lambda ctx "x" lp.(lp_T) (fun ctx => tRel 0).
 
 (** [mzero] is a lifting rule which always fails. *)
 Definition mzero : rule :=
@@ -236,6 +233,7 @@ Definition dest_prod {T} (reducing := true) (env : global_env) (ctx : context) (
     the case where [T] is an inductive.
 *)
 Definition destruct_map env ctx (f : term) : option inductive := 
+  let () := print ("destruct_map ON", pp_term env ctx f) in
   (* Get the type of the mapping function. *)
   mlet f_type <- 
     match infer env init_graph ctx f with
@@ -270,6 +268,7 @@ Definition destruct_map env ctx (f : term) : option inductive :=
 
 Definition custom_rule (rec_rule : rule) (map_name : kername) : rule :=
   fun env ctx lp =>
+    let () := print ("RULE custom ON", pp_term env ctx lp.(lp_T)) in
     (* Extract the type former. *)
     mlet tf_ind <- destruct_map env ctx (tConst map_name []) ;; 
     (* Check [T =?= tf_ind ?alpha] and [U =?= tf_ind ?beta]. *)
@@ -278,6 +277,7 @@ Definition custom_rule (rec_rule : rule) (map_name : kername) : rule :=
       if (ind1 == tf_ind) && (ind2 == tf_ind) then
         (* Recurse to lift [f : A -> B] to [f' : alpha -> beta]. *)
         let rec_lp := {| lp_A := lp.(lp_A) ; lp_B := lp.(lp_B) ; lp_f := lp.(lp_f) ; lp_T := alpha ; lp_U := beta |} in
+        let () := print ("Recursing on", pp_term env ctx alpha) in
         match rec_rule env ctx rec_lp with 
         | None => None 
         | Some f' => 
@@ -306,7 +306,7 @@ Definition lift_params (n : nat) (p : params) : params :=
     For instance [mk_kername ["Coq" ; "Init" ; "Datatypes"] "nat"] builds the kername
     of the inductive type [nat]. *)
 Definition mk_kername (path : list string) (label : string) : kername :=
-  (MPfile path, label).
+  (MPfile $ List.rev path, label).
 
 Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : term) : TM term :=
   tmPrint "ARG" ;;
@@ -318,11 +318,10 @@ Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : ter
     arg_ty 
     (replace_rel p.(A) p.(B) arg_ty)
   in
-  tmPrint =<< tmEval cbv lp ;;
   (* Build the lifting rule. *)
   let map_rule : Lift.rule :=
     fun env ctx lp =>
-      if conv env ctx lp.(Lift.lp_T) $ tApp (tInd p.(ind) []) [tRel p.(A)]
+      if check_conv env init_graph ctx lp.(Lift.lp_T) $ tApp (tInd p.(ind) []) [tRel p.(A)]
       then Some $ tApp (tRel p.(map)) [tRel p.(A); tRel p.(B); tRel p.(f)]
       else None 
   in
@@ -330,7 +329,9 @@ Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : ter
   let rule := Lift.fix_rule $ fun rec_rule =>
     Lift.sequence [ Lift.apply_rule ; Lift.id_rule ; map_rule ; Lift.custom_rule rec_rule list_map_kname] in
   (* Solve the lifting problem. *)
-  match rule env ctx lp with 
+  (* The use of [tmEval] is a hack to make [PrintEffect.print] actually print stuff. *)
+  mlet res <- tmEval cbv (rule env ctx lp) ;;
+  match res with 
   | None =>
     (* No applicable rule. *)
     tmFail ("No applicable rule for " ++ pp_term env ctx arg_ty)%bs
@@ -346,7 +347,6 @@ Definition build_branch env (ctx : context) (p : params) (ctor_idx : nat) (ctor 
   let n := List.length bcontext in
   (* Get the types of the arguments of the constructor at type [A]. *)
   let arg_tys := cstr_args_at ctor (tInd p.(ind) []) [tRel p.(A)] in
-  tmPrint =<< tmEval cbv arg_tys ;; 
   (* Process the arguments one by one, starting from the outermost one. *)
   let loop := fix loop ctx i acc decls :=
     match decls with 
@@ -427,7 +427,7 @@ Definition derive_map (ind_name : qualid) : TM unit :=
   (* Build the mapping function. We start with an empty context. *)
   mlet func <- build_map env [] ind ind_body ;;
   tmPrint "The resulting function :" ;;
-  tmPrint =<< tmEval cbv func ;;
+  (*tmPrint =<< tmEval cbv (pp_term env [] func) ;;*)
   (* Add the mapping function to the global environment. *)
   (* TODO : handle the case where [ind_name] contains dots '.' *)
   tmMkDefinition (ind_name ++ "_map")%bs func ;;
@@ -435,8 +435,8 @@ Definition derive_map (ind_name : qualid) : TM unit :=
 
 Inductive double A := 
   | Dnil : bool -> double A
-  | Double : double A -> list A -> double A.
+  | Double : A -> list (list (double A)) -> double A.
 
-(*MetaCoq Run (derive_map "double").
+MetaCoq Run (derive_map "double").
 
-Print double_map.*)
+Print double_map.
