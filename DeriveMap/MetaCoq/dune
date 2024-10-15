@@ -1,4 +1,4 @@
 (coq.theory
  (name DeriveMap.MetaCoq)
  (package coq-metaprogramming)
- (theories MetaCoq Equations Ltac2))
+ (theories MetaCoq Equations Ltac2 ReductionEffect))

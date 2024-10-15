@@ -437,17 +437,6 @@ Inductive double A :=
   | Dnil : bool -> double A
   | Double : double A -> list A -> double A.
 
-MetaCoq Run (derive_map "double").
-
-Print double_map.
-
-(*Definition double_map :=
-  fun (A B : Type) (f : A -> B) (x : double A) =>
-  match x with 
-  | Double x1 x2 => @Double B (f x1) (f x2)
-  end.*)
-
-
 (*MetaCoq Run (derive_map "double").
 
 Print double_map.*)
