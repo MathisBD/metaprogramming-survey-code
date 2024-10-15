@@ -21,4 +21,5 @@
   (coq
    (= 8.20.0))
   coq-elpi
-  coq-metacoq))
+  coq-metacoq
+  coq-reduction-effects))

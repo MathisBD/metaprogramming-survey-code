@@ -7,6 +7,9 @@ Require String.
 Import MCMonadNotation.
 Notation TM := TemplateMonad.
 
+Existing Instance config.default_checker_flags.
+Existing Instance default_fuel.
+
 (****************************************************************************)
 (** Utility functions. *)
 (****************************************************************************)
@@ -61,15 +64,11 @@ Definition mk_fix {M : Type -> Type} {_ : Monad M} (ctx : context)
    This happens all the time when using monads in Coq. *)
 
 (** [conv env ctx t1 t2] checks whether [t1] and [t2] are convertible in local context [ctx]. *)
-Definition conv env ctx (t1 : term) (t2 : term) : bool :=
-  match @check_conv config.default_checker_flags default_fuel env init_graph ctx t1 t2 with 
+Definition conv env ctx (t1 t2 : term) : bool :=
+  match check_conv env init_graph ctx t1 t2 with 
   | Checked _ => true 
   | TypeError _ => false 
   end.
-
-(** [alpha_eq t1 t2] checks if [t1] and [t2] are equal modulo alpha conversion. *)
-Definition alpha_eq (t1 : term) (t2 : term) : bool :=
-  @eq_term config.default_checker_flags init_graph t1 t2.
 
 (** Pretty print a term to a string. *)  
 Definition pp_term (env : global_env) (ctx : context) (t : term) : string :=
@@ -193,11 +192,100 @@ Definition sequence (rs : list rule) : rule :=
   match rs with [] => mzero | r :: rs => List.fold_left msum rs r end.
   
 (** Fixpoints for rules. We are in Coq so we use a [fuel] argument to prevent infinite recursion. *)
-Fixpoint fix_rule (fuel : Fuel) (f : rule -> rule) : rule := 
+Fixpoint fix_rule `{fuel : Fuel} (f : rule -> rule) : rule := 
   fun env ctx lp => 
     match fuel with 
     | 0 => None 
-    | S fuel => f (fix_rule fuel f) env ctx lp
+    | S fuel => f (@fix_rule fuel f) env ctx lp
+    end.
+
+(** [reduce_head F env ctx t] reduces [t] until a head constructor appears.
+    I think this does weak head normalization but I'm not completely sure. *)
+Definition reduce_head `{F : Fuel} (env : global_env) (ctx : context) (t : term) : option term :=
+  match t with
+  | tLambda _ _ _ => Some t 
+  | tProd _ _ _ => Some t
+  | _ =>
+	  match hnf_stack env ctx t with 
+    | Checked (f, args) => Some (mkApps f args) 
+    | _ => None
+    end
+  end.
+
+(* [dest_prod ctx t k] destructs [t] which should be of the form [tProd _ _ _],
+   and passes the extended context and the product arguments to the continuation [k]. 
+
+   If [t] is not a product it returns [None]. 
+   Ideally we would use any monad [M] which can fail instead of [option].
+*)
+Definition dest_prod {T} (reducing := true) (env : global_env) (ctx : context) (t : term) (k : context -> aname -> term -> term -> option T) : option T :=
+  (* Weak head reduce [t] if needed. *) 
+  mlet t <- (if reducing then reduce_head env ctx t else Some t) ;;
+  (* Destruct the product. *)
+  match t with 
+  | tProd name ty body => 
+    let decl := {| decl_name := name ; decl_type := ty ; decl_body := None |} in
+    k (decl :: ctx) name ty body
+  | _ => None
+  end.
+
+(** [detruct_map f] checks that [f] is a mapping function i.e. has type [forall (A B : Type), (A -> B) -> T A -> T B]
+    and returns [Some T] if it succeeds or [None] if it fails. 
+
+    Due to technical limitations (we don't have unification) we only handle 
+    the case where [T] is an inductive.
+*)
+Definition destruct_map env ctx (f : term) : option inductive := 
+  (* Get the type of the mapping function. *)
+  mlet f_type <- 
+    match infer env init_graph ctx f with
+    | Checked ty => Some ty
+    | TypeError _ => None
+    end
+  ;;
+  (* Check it has the right shape. *)
+  dest_prod env ctx f_type $ fun ctx _ Aty body => (* A : Type *)
+  dest_prod env ctx body   $ fun ctx _ Bty body => (* B : Type *)
+  dest_prod env ctx body   $ fun ctx _ Fty body => (* F : A -> B *)
+  dest_prod env ctx body   $ fun ctx _ TA TB    => (* TA *)
+    (* Lift all the types to the current level. *)
+    let Aty := lift0 4 Aty in
+    let Bty := lift0 3 Bty in
+    let Fty := lift0 2 Fty in
+    let TA := lift0 1 TA in
+    (* Check the types of A, B and F. *) 
+    match reduce_to_sort env ctx Aty, 
+           reduce_to_sort env ctx Bty, 
+           reduce env ctx Fty
+    with
+    | Checked _, Checked _, Checked (tProd _ (tRel 3) (tRel 3)) =>
+      (* Extract the inductive type from [TA] and [TB]. *)
+      match reduce env ctx TA, reduce env ctx TB with 
+      | Checked (tApp (tInd ind1 []) [tRel 3]), Checked (tApp (tInd ind2 []) [tRel 2]) =>
+         if ind1 == ind2 then Some ind1 else None
+      | _, _ => None 
+      end
+    | _, _, _ => None
+    end.
+
+Definition custom_rule (rec_rule : rule) (map_name : kername) : rule :=
+  fun env ctx lp =>
+    (* Extract the type former. *)
+    mlet tf_ind <- destruct_map env ctx (tConst map_name []) ;; 
+    (* Check [T =?= tf_ind ?alpha] and [U =?= tf_ind ?beta]. *)
+    match reduce_head env ctx lp.(lp_T), reduce_head env ctx lp.(lp_U) with 
+    | Some (tApp (tInd ind1 []) [alpha]), Some (tApp (tInd ind2 []) [beta]) =>
+      if (ind1 == tf_ind) && (ind2 == tf_ind) then
+        (* Recurse to lift [f : A -> B] to [f' : alpha -> beta]. *)
+        let rec_lp := {| lp_A := lp.(lp_A) ; lp_B := lp.(lp_B) ; lp_f := lp.(lp_f) ; lp_T := alpha ; lp_U := beta |} in
+        match rec_rule env ctx rec_lp with 
+        | None => None 
+        | Some f' => 
+          (* Success ! All that is left is to lift [f' : alpha -> beta] to [T -> U]. *)
+          Some (mkApps (tConst map_name []) [alpha ; beta ; f'])
+        end
+      else None
+    | _, _ => None
     end.
 
 End Lift.
@@ -213,6 +301,12 @@ Record params := mk_params { ind : inductive ; map : nat ; A : nat ; B : nat ; f
 (** [lift_params n params] lifts the parameters [params] under [n] binders. *)
 Definition lift_params (n : nat) (p : params) : params :=
   {| ind := p.(ind) ; map := p.(map) + n ; A := p.(A) + n ; B := p.(B) + n ; f := p.(f) + n ; x := p.(x) + n |}.
+
+(** [mk_kername path label] returns the kernel name with given directory path and label.
+    For instance [mk_kername ["Coq" ; "Init" ; "Datatypes"] "nat"] builds the kername
+    of the inductive type [nat]. *)
+Definition mk_kername (path : list string) (label : string) : kername :=
+  (MPfile path, label).
 
 Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : term) : TM term :=
   tmPrint "ARG" ;;
@@ -232,7 +326,9 @@ Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : ter
       then Some $ tApp (tRel p.(map)) [tRel p.(A); tRel p.(B); tRel p.(f)]
       else None 
   in
-  let rule := Lift.sequence [ Lift.apply_rule ; Lift.id_rule ; map_rule ] in
+  let list_map_kname := mk_kername ["Coq" ; "Lists" ; "List"] "map" in
+  let rule := Lift.fix_rule $ fun rec_rule =>
+    Lift.sequence [ Lift.apply_rule ; Lift.id_rule ; map_rule ; Lift.custom_rule rec_rule list_map_kname] in
   (* Solve the lifting problem. *)
   match rule env ctx lp with 
   | None =>
@@ -315,7 +411,7 @@ Definition derive_map (ind_name : qualid) : TM unit :=
     end ;;
   (* Get the environment needed to build the mapping function. *)
   mlet ind_term <- tmUnquote (tInd ind []) ;;
-  mlet (env, _) <- tmQuoteRec (my_projT2 ind_term) ;;
+  mlet (env, _) <- tmQuoteRec (my_projT2 ind_term, List.map) ;;
   (* Get the inductive body. *)
   mlet ind_body <-
     match lookup_inductive env ind with 
@@ -339,7 +435,7 @@ Definition derive_map (ind_name : qualid) : TM unit :=
 
 Inductive double A := 
   | Dnil : bool -> double A
-  | Double : double A -> A -> double A.
+  | Double : double A -> list A -> double A.
 
 MetaCoq Run (derive_map "double").
 
