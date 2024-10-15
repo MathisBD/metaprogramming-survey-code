@@ -78,7 +78,9 @@ let arr (t1 : EConstr.t) (t2 : EConstr.t) : EConstr.t = EConstr.mkArrowR t1 (ECo
 (** [subterm x t] checks whether [x] occurs in [t], modulo alpha equivalence.
     It takes time [O(size(x) * size(t))]. *)
 let rec subterm sigma (x : EConstr.t) (t : EConstr.t) : bool =
-  EConstr.fold sigma (fun b subt -> b || subterm sigma x subt) (EConstr.eq_constr sigma x t) t
+  EConstr.fold_with_binders sigma (EConstr.Vars.lift 1)
+    (fun x b subt -> b || subterm sigma x subt)
+    x (EConstr.eq_constr sigma x t) t
 
 (* Helper function to apply the inductive to a single parameter. *)
 let apply_ind env (ind : Names.Ind.t) (t : EConstr.t) : EConstr.t =
@@ -92,17 +94,17 @@ let apply_ind env (ind : Names.Ind.t) (t : EConstr.t) : EConstr.t =
 (** This module handles lifting of functions from basic types to more elaborate types. *)
 module Lift = struct
   (** A lifting problem consists in lifting a function [f : A -> B] to a function [T -> U].
-        It is assumed that U is equal to T with A replaced by B. *)
+      It is assumed that U is equal to T with A replaced by B. *)
   type problem = { a : EConstr.t; b : EConstr.t; f : EConstr.t; t : EConstr.t; u : EConstr.t }
 
   (** A lifting rule takes as input a lifting problem, and either :
-        - Fails by returning [None]
-        - Succeeds by returning a function [Some f'] where [f' : T -> U].
+      - Fails by returning [None]
+      - Succeeds by returning a function [Some f'] where [f' : T -> U].
 
-        Formally lifting rules form a (simple) monad, and this would indeed be the ideal
-        way to program with them IMO. This way the standard functions defined below (such as [sequence])
-        could be automatically generated using some kind of functor. In the interest of keeping this
-        example simple I stick to a simpler approach.
+      Formally lifting rules form a (simple) monad, and this would indeed be the ideal
+      way to program with them IMO. This way the standard functions defined below (such as [sequence])
+      could be automatically generated using some kind of functor. In the interest of keeping this
+      example simple I stick to a simpler approach.
     *)
   type rule = Environ.env -> Evd.evar_map -> problem -> (Evd.evar_map * EConstr.t) option
 

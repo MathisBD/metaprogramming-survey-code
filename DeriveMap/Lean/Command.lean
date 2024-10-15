@@ -249,6 +249,8 @@ inductive Double (A : Type u) : Type u :=
 #derive_map `Double
 #add_map `Double.map
 
+#print Double.map
+
 inductive Mylist (A : Type u) : Type u :=
   | nil : Bool → Mylist A
   | duh : A → A → Mylist A

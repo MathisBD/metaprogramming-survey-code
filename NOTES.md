@@ -1,6 +1,6 @@
-# Questions for the experts
+# Lean Questions
 
-1. Unification in the presence of universe polymorphism.
+- Unification in the presence of universe polymorphism.
 Example : recognize "mapping functions". In Lean syntax :
   List.map.{u1, u2} : forall (A : Type u1) (B : Type u2), (A -> B) -> List.{u1} A -> List.{u2} B
 general pattern : 
@@ -8,8 +8,21 @@ general pattern :
 problem : this does not unify (because it requires List.{u1} = List.{u2})
 The nice way to solve this would be to allow metavariables to depend on universe levels : ?T.{u}
 
-2. For Yannick : in metacoq
-  - "open recursors" for [term] : are they in metacoq ? Should they be added ?
+- relevance on binders (caching) ?
+
+- Locally nameless optims : caching ?
+
+- unsafe/partial defs in lean
+
+- building fixpoints (/let-rec) in Expr directly 
+-> lookup "predef"
+-> ask Mario if needed
+
+# MetaCoq Questions
+
+- slow template monad fixpoints ?
+
+- "open recursors" for [term] : are they in metacoq ? Should they be added ?
 
 # Bugs
 

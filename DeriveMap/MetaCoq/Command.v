@@ -82,7 +82,7 @@ Definition pp_term (env : global_env) (ctx : context) (t : term) : string :=
   print_term (env, Monomorphic_ctx) (List.map decl_ident ctx) true t.
 
 (** This is the corrected version of [noccur_between].
-    [correct_noccur_between k n t] checks that [t] does not contain any de Bruijn index
+    [correct_noccur_between k n t] checks that [t] does *not* contain any de Bruijn index
     in the range [k ... k + n - 1]. *)
 Fixpoint correct_noccur_between (k n : nat) (t : term) {struct t} : bool :=
   match t with
@@ -118,7 +118,6 @@ Fixpoint correct_noccur_between (k n : nat) (t : term) {struct t} : bool :=
 Definition cstr_args_at (cstr : constructor_body) (ind : term) (params : list term) : context :=
   subst_context (List.rev (ind :: params)) 0 $ cstr_args cstr.
 
-
 (** [monad_mapi f l] is the same as [monad_map f l] except the function [f]
     is fed the index of each argument. *)
 Definition monad_mapi (T : Type -> Type) (M : Monad T) (A B : Type) (f : nat -> A -> T B) (l : list A) :=
@@ -126,36 +125,123 @@ Definition monad_mapi (T : Type -> Type) (M : Monad T) (A B : Type) (f : nat -> 
 
 Arguments monad_mapi {T}%_function_scope {M} {A B}%_type_scope f%_function_scope l%_list_scope.
     
+(** [replace_rel a b t] replaces [Rel a] with [Rel b] in [t]. *)
+Fixpoint replace_rel (a b : nat) (t : term) : term :=
+  if t == tRel a
+  then tRel b
+  else map_term_with_binders (Nat.add 1) (replace_rel a) b t.
+
+(** [subterm x t] checks whether [x] occurs in [t], modulo alpha equivalence.
+    It takes time [O(size(x) * size(t))]. *)
+Definition subterm (x t : term) : bool :=
+  (* Hack : we only support the case where [x] is a [tRel]. This is sufficient for our purposes.
+     For the general case we would need [fold_term_with_binders] and I'm too lazy to implement it. *)
+  match x with 
+  | tRel n => negb $ correct_noccur_between n 1 t
+  | _ => false 
+  end. 
+  
+(****************************************************************************)
+(** Lifting mapping functions. *)
+(****************************************************************************)
+
+(** This module handles lifting of functions from basic types to more elaborate types. *)
+Module Lift.
+
+(** A lifting problem consists in lifting a function [f : A -> B] to a function [T -> U].
+    It is assumed that U is equal to T with A replaced by B. *)
+Record problem := mk_problem 
+  { lp_A : term ; lp_B : term ; lp_f : term ; lp_T : term ; lp_U : term }.
+
+(** A lifting rule takes as input a lifting problem, and either :
+    - Fails by returning [None]
+    - Succeeds by returning a function [Some f'] where [f' : T -> U].
+*)
+Definition rule := global_env -> context -> problem -> option term.
+
+(** Basic lifting rule when [T] = [A].
+    In this case we solve with [f' = f] *)
+Definition apply_rule : rule := 
+  fun env ctx lp =>
+    if conv env ctx lp.(lp_A) lp.(lp_T)
+    then Some lp.(lp_f)
+    else None.
+
+(** Basic lifting rule when [A] does not occur in [T].
+    In this case we solve with [f' x = x]. *)
+Definition id_rule : rule :=
+  fun env ctx lp =>
+    if subterm lp.(lp_A) lp.(lp_T)
+    then None 
+    else Some $ mk_lambda ctx "x" lp.(lp_T) (fun ctx => tRel 0).
+
+(** [mzero] is a lifting rule which always fails. *)
+Definition mzero : rule :=
+  fun env ctx lp => None.
+
+(** [msum r1 r2] tries the rule [r1], and if it fails applies [r2]. *)
+Definition msum (r1 : rule) (r2 : rule) : rule :=
+  fun env ctx lp => 
+    match r1 env ctx lp with
+    | None => r2 env ctx lp 
+    | Some res => Some res
+    end.
+
+(** [sequence rs] combines the lifting rules [rs] by trying them out in order from first to last
+    until one succeeds. *)
+Definition sequence (rs : list rule) : rule :=
+  match rs with [] => mzero | r :: rs => List.fold_left msum rs r end.
+  
+(** Fixpoints for rules. We are in Coq so we use a [fuel] argument to prevent infinite recursion. *)
+Fixpoint fix_rule (fuel : Fuel) (f : rule -> rule) : rule := 
+  fun env ctx lp => 
+    match fuel with 
+    | 0 => None 
+    | S fuel => f (fix_rule fuel f) env ctx lp
+    end.
+
+End Lift.
 
 (****************************************************************************)
 (** DeriveMap and AddMap commands. *)
 (****************************************************************************)
 
+(** A small record to hold the parameters of the mapping function while
+    we build its body. *)
 Record params := mk_params { ind : inductive ; map : nat ; A : nat ; B : nat ; f : nat ; x : nat }.
 
+(** [lift_params n params] lifts the parameters [params] under [n] binders. *)
 Definition lift_params (n : nat) (p : params) : params :=
   {| ind := p.(ind) ; map := p.(map) + n ; A := p.(A) + n ; B := p.(B) + n ; f := p.(f) + n ; x := p.(x) + n |}.
 
 Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : term) : TM term :=
   tmPrint "ARG" ;;
-  tmPrint =<< tmEval cbv p ;;
-  tmPrint =<< tmEval cbv arg ;;
-  tmPrint =<< tmEval cbv arg_ty ;;
-  if conv env ctx arg_ty $ tRel p.(A) then 
-    (* Rule APPLY. *)
-    tmPrint "APPLY" ;;
-    tmReturn $ tApp (tRel p.(f)) [arg]
-  else if correct_noccur_between p.(A) 1 arg_ty then 
-    (* Rule ID. *)
-    tmPrint "ID" ;;
-    tmReturn $ arg
-  else if conv env ctx arg_ty $ tApp (tInd p.(ind) []) [tRel p.(A)] then
-    (* Rule MAP. *)
-    tmPrint "MAP" ;; 
-    tmReturn $ tApp (tRel p.(map)) [tRel p.(A); tRel p.(B); tRel p.(f); arg]
-  else 
+  (* Build the lifting problem. *)
+  let lp := Lift.mk_problem
+    (tRel p.(A))
+    (tRel p.(B))
+    (tRel p.(f))
+    arg_ty 
+    (replace_rel p.(A) p.(B) arg_ty)
+  in
+  tmPrint =<< tmEval cbv lp ;;
+  (* Build the lifting rule. *)
+  let map_rule : Lift.rule :=
+    fun env ctx lp =>
+      if conv env ctx lp.(Lift.lp_T) $ tApp (tInd p.(ind) []) [tRel p.(A)]
+      then Some $ tApp (tRel p.(map)) [tRel p.(A); tRel p.(B); tRel p.(f)]
+      else None 
+  in
+  let rule := Lift.sequence [ Lift.apply_rule ; Lift.id_rule ; map_rule ] in
+  (* Solve the lifting problem. *)
+  match rule env ctx lp with 
+  | None =>
     (* No applicable rule. *)
-    tmFail ("No applicable rule for " ++ pp_term env ctx arg_ty)%bs.
+    tmFail ("No applicable rule for " ++ pp_term env ctx arg_ty)%bs
+  | Some f' =>
+    (* Success ! Apply [f'] to the argument. *) 
+    tmReturn $ tApp f' [arg]
+  end.
 
 Definition build_branch env (ctx : context) (p : params) (ctor_idx : nat) (ctor : constructor_body) : TM (branch term) :=
   tmPrint "BRANCH" ;;
@@ -255,6 +341,10 @@ Inductive double A :=
   | Dnil : bool -> double A
   | Double : double A -> A -> double A.
 
+MetaCoq Run (derive_map "double").
+
+Print double_map.
+
 (*Definition double_map :=
   fun (A B : Type) (f : A -> B) (x : double A) =>
   match x with 
@@ -262,8 +352,6 @@ Inductive double A :=
   end.*)
 
 
-MetaCoq Run (derive_map "double").
+(*MetaCoq Run (derive_map "double").
 
-Print double_map.
-
-Print tmPrint.
+Print double_map.*)
