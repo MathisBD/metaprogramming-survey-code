@@ -2,7 +2,7 @@ all:
 	dune build
 	lake build
 
-install:
+install: all
 	dune install
 
 clean:

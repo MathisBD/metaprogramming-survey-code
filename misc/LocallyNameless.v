@@ -1,4 +1,4 @@
-(* Distributed under the terms of the MIT license. *)
+(* Locally nameless skeleton for MetaCoq. *)
 From MetaCoq.Utils Require Import utils.
 From MetaCoq.Template Require Import All.
 From DeriveMap.MetaCoq Require Import Utils.

@@ -64,6 +64,11 @@ Definition mk_fix {M : Type -> Type} {_ : Monad M} (ctx : context)
 (* TODO show to Yannick : removing [0] in the last line gives a cryptic error message.
    This happens all the time when using monads in Coq. *)
 
+(** [mk_kername path label] returns the kernel name with given directory path and label.
+    For instance [mk_kername ["Coq" ; "Init" ; "Datatypes"] "nat"] builds the kername
+    of the inductive type [nat]. *)
+    Definition mk_kername (path : list string) (label : string) : kername :=
+      (MPfile $ List.rev path, label).    
 
 (** Pretty print a term to a string. *)  
 Definition pp_term (env : global_env) (ctx : context) (t : term) : string :=
@@ -135,6 +140,36 @@ Definition subterm (x t : term) : bool :=
   | _ => false 
   end. 
   
+(** [reduce_head F env ctx t] reduces [t] until a head constructor appears.
+    I think this does weak head normalization but I'm not completely sure. *)
+Definition reduce_head `{F : Fuel} (env : global_env) (ctx : context) (t : term) : option term :=
+  match t with
+  | tLambda _ _ _ => Some t 
+  | tProd _ _ _ => Some t
+  | _ =>
+    match hnf_stack env ctx t with 
+    | Checked (f, args) => Some (mkApps f args) 
+    | _ => None
+    end
+  end.
+
+(* [dest_prod ctx t k] destructs [t] which should be of the form [tProd _ _ _],
+   and passes the extended context and the product arguments to the continuation [k]. 
+
+   If [t] is not a product it returns [None]. 
+   Ideally we would use any monad [M] which can fail instead of [option].
+*)
+Definition dest_prod {T} (reducing := true) (env : global_env) (ctx : context) (t : term) (k : context -> aname -> term -> term -> option T) : option T :=
+  (* Weak head reduce [t] if needed. *) 
+  mlet t <- (if reducing then reduce_head env ctx t else Some t) ;;
+  (* Destruct the product. *)
+  match t with 
+  | tProd name ty body => 
+    let decl := {| decl_name := name ; decl_type := ty ; decl_body := None |} in
+    k (decl :: ctx) name ty body
+  | _ => None
+  end.
+
 (****************************************************************************)
 (** Lifting mapping functions. *)
 (****************************************************************************)
@@ -195,36 +230,6 @@ Fixpoint fix_rule `{fuel : Fuel} (f : rule -> rule) : rule :=
     | 0 => None 
     | S fuel => f (@fix_rule fuel f) env ctx lp
     end.
-
-(** [reduce_head F env ctx t] reduces [t] until a head constructor appears.
-    I think this does weak head normalization but I'm not completely sure. *)
-Definition reduce_head `{F : Fuel} (env : global_env) (ctx : context) (t : term) : option term :=
-  match t with
-  | tLambda _ _ _ => Some t 
-  | tProd _ _ _ => Some t
-  | _ =>
-	  match hnf_stack env ctx t with 
-    | Checked (f, args) => Some (mkApps f args) 
-    | _ => None
-    end
-  end.
-
-(* [dest_prod ctx t k] destructs [t] which should be of the form [tProd _ _ _],
-   and passes the extended context and the product arguments to the continuation [k]. 
-
-   If [t] is not a product it returns [None]. 
-   Ideally we would use any monad [M] which can fail instead of [option].
-*)
-Definition dest_prod {T} (reducing := true) (env : global_env) (ctx : context) (t : term) (k : context -> aname -> term -> term -> option T) : option T :=
-  (* Weak head reduce [t] if needed. *) 
-  mlet t <- (if reducing then reduce_head env ctx t else Some t) ;;
-  (* Destruct the product. *)
-  match t with 
-  | tProd name ty body => 
-    let decl := {| decl_name := name ; decl_type := ty ; decl_body := None |} in
-    k (decl :: ctx) name ty body
-  | _ => None
-  end.
 
 (** [detruct_map f] checks that [f] is a mapping function i.e. has type [forall (A B : Type), (A -> B) -> T A -> T B]
     and returns [Some T] if it succeeds or [None] if it fails. 
@@ -294,6 +299,14 @@ End Lift.
 (** DeriveMap and AddMap commands. *)
 (****************************************************************************)
 
+(** The list of map functions. 
+    We use a constant list in this file because I didn't find a simple 
+    way to update it using an [AddMap] function. *)
+Definition name_db := 
+  [ mk_kername ["Coq" ; "Lists" ; "List"] "map" 
+  ; mk_kername ["Coq" ; "Init" ; "Datatypes"] "option_map"
+  ].
+
 (** A small record to hold the parameters of the mapping function while
     we build its body. *)
 Record params := mk_params { ind : inductive ; map : nat ; A : nat ; B : nat ; f : nat ; x : nat }.
@@ -301,12 +314,6 @@ Record params := mk_params { ind : inductive ; map : nat ; A : nat ; B : nat ; f
 (** [lift_params n params] lifts the parameters [params] under [n] binders. *)
 Definition lift_params (n : nat) (p : params) : params :=
   {| ind := p.(ind) ; map := p.(map) + n ; A := p.(A) + n ; B := p.(B) + n ; f := p.(f) + n ; x := p.(x) + n |}.
-
-(** [mk_kername path label] returns the kernel name with given directory path and label.
-    For instance [mk_kername ["Coq" ; "Init" ; "Datatypes"] "nat"] builds the kername
-    of the inductive type [nat]. *)
-Definition mk_kername (path : list string) (label : string) : kername :=
-  (MPfile $ List.rev path, label).
 
 Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : term) : TM term :=
   tmPrint "ARG" ;;
@@ -325,9 +332,11 @@ Definition build_arg env (ctx : context) (p : params) (arg : term) (arg_ty : ter
       then Some $ tApp (tRel p.(map)) [tRel p.(A); tRel p.(B); tRel p.(f)]
       else None 
   in
-  let list_map_kname := mk_kername ["Coq" ; "Lists" ; "List"] "map" in
-  let rule := Lift.fix_rule $ fun rec_rule =>
-    Lift.sequence [ Lift.apply_rule ; Lift.id_rule ; map_rule ; Lift.custom_rule rec_rule list_map_kname] in
+  let rule := 
+    Lift.fix_rule $ fun rec_rule =>
+      Lift.sequence $ 
+        Lift.apply_rule :: Lift.id_rule :: map_rule :: List.map (Lift.custom_rule rec_rule) name_db 
+  in
   (* Solve the lifting problem. *)
   (* The use of [tmEval] is a hack to make [PrintEffect.print] actually print stuff. *)
   mlet res <- tmEval cbv (rule env ctx lp) ;;
@@ -400,6 +409,27 @@ Definition build_map env (ctx : context) (ind : inductive) (ind_body : one_induc
   (* Finally make the case expression. *)
   tmReturn (tCase ci pred (tRel p.(x)) branches).
 
+(* [env_of_term ts] returns the global environment needed to type the terms in [ts]. 
+
+   This function is maybe slower than it should be (I use [merge_global_envs] a lot).
+   If performance becomes an issue you can try calling [tmQuoteRec] only once,
+   on the list of unquoted terms. I tried this approach but failed to deal
+   with the dependent typing and universe issues it caused (all the terms in [ts] might
+   have different types).
+*)
+Fixpoint env_of_terms (ts : list term) : TM global_env :=
+  match ts with 
+  | [] => tmReturn empty_global_env
+  | t :: ts =>
+    (* Get the environment for [t]. *)
+    mlet t <- tmUnquote t ;;
+    mlet (t_env, _) <- tmQuoteRec (my_projT2 t) ;;
+    (* Get the environment for [ts]. *)
+    mlet ts_env <- env_of_terms ts ;;
+    (* Merge both envs. *)
+    tmReturn (merge_global_envs t_env ts_env)
+  end.
+
 (** DeriveMap command entry point. *)
 Definition derive_map (ind_name : qualid) : TM unit := 
   (* Locate the inductive. *)
@@ -409,9 +439,11 @@ Definition derive_map (ind_name : qualid) : TM unit :=
     | IndRef ind => tmReturn ind
     | _ => tmFail "Provided constant is not an inductive." 
     end ;;
-  (* Get the environment needed to build the mapping function. *)
-  mlet ind_term <- tmUnquote (tInd ind []) ;;
-  mlet (env, _) <- tmQuoteRec (my_projT2 ind_term, List.map) ;;
+  (* Get the environment needed to build the mapping function.
+     Take care to include the environment needed to type :
+     - the given inductive [ind].
+     - all the mapping functions in the database. *)
+  mlet env <- env_of_terms (tInd ind [] :: List.map (fun name => tConst name []) name_db) ;;
   (* Get the inductive body. *)
   mlet ind_body <-
     match lookup_inductive env ind with 
@@ -427,16 +459,7 @@ Definition derive_map (ind_name : qualid) : TM unit :=
   (* Build the mapping function. We start with an empty context. *)
   mlet func <- build_map env [] ind ind_body ;;
   tmPrint "The resulting function :" ;;
-  (*tmPrint =<< tmEval cbv (pp_term env [] func) ;;*)
   (* Add the mapping function to the global environment. *)
   (* TODO : handle the case where [ind_name] contains dots '.' *)
   tmMkDefinition (ind_name ++ "_map")%bs func ;;
   tmReturn tt.
-
-Inductive double A := 
-  | Dnil : bool -> double A
-  | Double : A -> list (list (double A)) -> double A.
-
-MetaCoq Run (derive_map "double").
-
-Print double_map.
