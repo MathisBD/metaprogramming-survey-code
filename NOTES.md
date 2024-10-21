@@ -1,12 +1,16 @@
 ### Questions
 
-# Lean
-- building fixpoints (/let-rec) in Expr directly 
+Lean: building fixpoints (/let-rec) in Expr directly 
   -> lookup "predef"
   -> ask Mario if needed
 
-# MetaCoq
-- "open recursors" for [term] : are they in metacoq ? Should they be added ?
+MetaCoq: "open recursors" for [term] : are they in metacoq ? Should they be added ?
+
+API: give me an example where "mk_tLambda" is *actually* useful (better than "kp_tLambda").
+
+API: state_old, state_replace and state_scope is a mess, can we get rid of them ?
+
+API: why do mk_tLambda, kp_tLambda etc take an [option ident] as input ?
 
 ### Bugs
 

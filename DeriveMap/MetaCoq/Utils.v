@@ -1,4 +1,15 @@
+(*******************************************************************************)
+(** This file contains utility functions which should be part of metacoq. *)
+(*******************************************************************************)
 From MetaCoq.Template Require Import All.
+From MetaCoq.Utils Require Import utils.
+Import MCMonadNotation.
+
+Set Universe Polymorphism.
+
+(*******************************************************************************)
+(** Open recursors on terms (which should be part of MetaCoq). *)
+(*******************************************************************************)
 
 (** [iterate n f x] applies [f] [n] times to [x]. *)
 Fixpoint iterate {A}  (n : nat) (f : A -> A) (x : A) : A :=
@@ -6,10 +17,6 @@ Fixpoint iterate {A}  (n : nat) (f : A -> A) (x : A) : A :=
   | 0 => x
   | S n => iterate n f (f x)
   end.
-
-(*******************************************************************************)
-(** Open recursors on terms (which should be part of MetaCoq). *)
-(*******************************************************************************)
 
 Definition map_def (f : term -> term) (d : def term) : def term :=
   {| dname := d.(dname) ; dtype := f d.(dtype) ; dbody := f d.(dbody) ; rarg := d.(rarg) |}.
@@ -84,3 +91,58 @@ Definition map_term_with_binders {A} (lift : A -> A) (f : A -> term -> term) (ac
     tCase ci (map_predicate_with_binders lift f acc pred) (f acc x) (List.map (map_branch_with_binders lift f acc) branches)
   | tArray l t def ty => tArray l (List.map (f acc) t) (f acc def) (f acc ty)
   end.
+
+(*******************************************************************************)
+(* Other term utilities. *)
+(*******************************************************************************)
+
+(** This is the corrected version of [noccur_between].
+    [correct_noccur_between k n t] checks that [t] does *not* contain any de Bruijn index
+    in the range [k ... k + n - 1]. *)
+Fixpoint correct_noccur_between (k n : nat) (t : term) {struct t} : bool :=
+  match t with
+  | tRel i => (i <? k) || (k + n <=? i)
+  | tEvar _ args => forallb (correct_noccur_between k n) args
+  | tCast c _ t0 => correct_noccur_between k n c && correct_noccur_between k n t0
+  | tProd _ T M | tLambda _ T M =>
+	  correct_noccur_between k n T && correct_noccur_between (S k) n M
+  | tLetIn _ b t0 b' =>
+      correct_noccur_between k n b && correct_noccur_between k n t0 &&
+      correct_noccur_between (S k) n b'
+  | tApp u v => correct_noccur_between k n u && forallb (correct_noccur_between k n) v
+  | tCase _ p c brs =>
+      let k' := #|pcontext p| + k in
+      let p' :=
+        test_predicate (fun _ : Instance.t => true) 
+          (correct_noccur_between k n) (correct_noccur_between k' n) p in
+      let brs' := test_branches_k (fun k0 : nat => correct_noccur_between k0 n) k brs
+        in
+      p' && correct_noccur_between k n c && brs'
+  | tProj _ c => correct_noccur_between k n c
+  | tFix mfix _ | tCoFix mfix _ =>
+      let k' := #|mfix| + k in
+      forallb (test_def (correct_noccur_between k n) (correct_noccur_between k' n)) mfix
+  | tArray _ arr def ty =>
+      forallb (correct_noccur_between k n) arr && correct_noccur_between k n def &&
+      correct_noccur_between k n ty
+  | _ => true
+  end.
+
+(*******************************************************************************)
+(* Monad Utils. *)
+(*******************************************************************************)
+
+(** [monad_mapi f l] is the same as [monad_map f l] except the function [f]
+    is fed the index of each argument. *)
+Definition monad_mapi (T : Type -> Type) (M : Monad T) (A B : Type) (f : nat -> A -> T B) (l : list A) :=
+  let fix loop i l :=
+    match l with
+    | [] => ret []
+    | x :: l => 
+      mlet x' <- f i x ;;
+      mlet l' <- loop (S i) l ;;
+      ret (x' :: l')
+    end
+  in loop 0 l.
+
+Arguments monad_mapi {T}%_function_scope {M} {A B}%_type_scope f%_function_scope l%_list_scope.

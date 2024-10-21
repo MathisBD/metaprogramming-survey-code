@@ -1,4 +1,4 @@
-From DeriveMap.MetaCoq Require Import Command.
+From DeriveMap.MetaCoq Require Import CommandDeBruijn.
 From MetaCoq.Utils Require Import utils.
 
 Inductive double A := 

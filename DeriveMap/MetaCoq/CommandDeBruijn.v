@@ -67,8 +67,8 @@ Definition mk_fix {M : Type -> Type} {_ : Monad M} (ctx : context)
 (** [mk_kername path label] returns the kernel name with given directory path and label.
     For instance [mk_kername ["Coq" ; "Init" ; "Datatypes"] "nat"] builds the kername
     of the inductive type [nat]. *)
-    Definition mk_kername (path : list string) (label : string) : kername :=
-      (MPfile $ List.rev path, label).    
+Definition mk_kername (path : list string) (label : string) : kername :=
+  (MPfile $ List.rev path, label).    
 
 (** Pretty print a term to a string. *)  
 Definition pp_term (env : global_env) (ctx : context) (t : term) : string :=
@@ -80,49 +80,10 @@ Definition pp_term (env : global_env) (ctx : context) (t : term) : string :=
   in
   print_term (env, Monomorphic_ctx) (List.map decl_ident ctx) true t.
 
-(** This is the corrected version of [noccur_between].
-    [correct_noccur_between k n t] checks that [t] does *not* contain any de Bruijn index
-    in the range [k ... k + n - 1]. *)
-Fixpoint correct_noccur_between (k n : nat) (t : term) {struct t} : bool :=
-  match t with
-  | tRel i => (i <? k) || (k + n <=? i)
-  | tEvar _ args => forallb (correct_noccur_between k n) args
-  | tCast c _ t0 => correct_noccur_between k n c && correct_noccur_between k n t0
-  | tProd _ T M | tLambda _ T M =>
-	  correct_noccur_between k n T && correct_noccur_between (S k) n M
-  | tLetIn _ b t0 b' =>
-      correct_noccur_between k n b && correct_noccur_between k n t0 &&
-      correct_noccur_between (S k) n b'
-  | tApp u v => correct_noccur_between k n u && forallb (correct_noccur_between k n) v
-  | tCase _ p c brs =>
-      let k' := #|pcontext p| + k in
-      let p' :=
-        test_predicate (fun _ : Instance.t => true) 
-          (correct_noccur_between k n) (correct_noccur_between k' n) p in
-      let brs' := test_branches_k (fun k0 : nat => correct_noccur_between k0 n) k brs
-        in
-      p' && correct_noccur_between k n c && brs'
-  | tProj _ c => correct_noccur_between k n c
-  | tFix mfix _ | tCoFix mfix _ =>
-      let k' := #|mfix| + k in
-      forallb (test_def (correct_noccur_between k n) (correct_noccur_between k' n)) mfix
-  | tArray _ arr def ty =>
-      forallb (correct_noccur_between k n) arr && correct_noccur_between k n def &&
-      correct_noccur_between k n ty
-  | _ => true
-  end.
-
 (** [cstr_args_at cstr ind params] gives the context for the arguments of the constructor [cstr],
     substituting [ind] for the inductive and [params] for the parameters of the constructor. *)
 Definition cstr_args_at (cstr : constructor_body) (ind : term) (params : list term) : context :=
   subst_context (List.rev (ind :: params)) 0 $ cstr_args cstr.
-
-(** [monad_mapi f l] is the same as [monad_map f l] except the function [f]
-    is fed the index of each argument. *)
-Definition monad_mapi (T : Type -> Type) (M : Monad T) (A B : Type) (f : nat -> A -> T B) (l : list A) :=
-  monad_map (fun '(i, a) => f i a) $ mapi pair l.
-
-Arguments monad_mapi {T}%_function_scope {M} {A B}%_type_scope f%_function_scope l%_list_scope.
     
 (** [replace_rel a b t] replaces [Rel a] with [Rel b] in [t]. *)
 Fixpoint replace_rel (a b : nat) (t : term) : term :=
