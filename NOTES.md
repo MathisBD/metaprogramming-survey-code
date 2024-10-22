@@ -1,16 +1,22 @@
 ### Questions
 
+Coq: weird typeclass errors, especially when using monads --> this is what made Louise quit MetaCoq.
+
+Coq: pretty printing library ? ==> reimplement a cleaner version of TemplateCoq/Pretty.v (which deals with indentation correctly).
+
+MetaCoq: Where are "open recursors" for [term] ?
+
+API vs Locally Nameless : context management.
+  if tracking several terms in a same context : C |- t1, C |- t2, C |- t3
+  opening a binder in (t1 = tProd _ A B) requires adding a declaration for A in C, and thus lifting t2 and t3
+
+  if tracking several terms in different contexes : C1 |- t1, C2 |- t2, C3 |- t3
+  opening a binder in (t1 = tProd _ A B) is OK : simply add a declaration for A in C1.
+  !! but now you can't use A in t2 or t3 !!
+
 Lean: building fixpoints (/let-rec) in Expr directly 
   -> lookup "predef"
   -> ask Mario if needed
-
-MetaCoq: "open recursors" for [term] : are they in metacoq ? Should they be added ?
-
-API: give me an example where "mk_tLambda" is *actually* useful (better than "kp_tLambda").
-
-API: state_old, state_replace and state_scope is a mess, can we get rid of them ?
-
-API: why do mk_tLambda, kp_tLambda etc take an [option ident] as input ?
 
 ### Bugs
 

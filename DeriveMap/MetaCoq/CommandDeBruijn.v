@@ -424,3 +424,5 @@ Definition derive_map (ind_name : qualid) : TM unit :=
   (* TODO : handle the case where [ind_name] contains dots '.' *)
   tmMkDefinition (ind_name ++ "_map")%bs func ;;
   tmReturn tt.
+
+MetaCoq Run (derive_map "option").

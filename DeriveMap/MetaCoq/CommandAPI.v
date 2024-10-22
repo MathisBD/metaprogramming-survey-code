@@ -29,6 +29,12 @@ Definition get_rel (x : ident) (s : state) : nat :=
 Definition mk_arrow (t1 : term) (t2 : term) : term := 
   tProd {| binder_name := nAnon ; binder_relevance := Relevant |} t1 (lift0 1 t2).
 
+(** [mk_kername path label] returns the kernel name with given directory path and label.
+    For instance [mk_kername ["Coq" ; "Init" ; "Datatypes"] "nat"] builds the kername
+    of the inductive type [nat]. *)
+Definition mk_kername (path : list string) (label : string) : kername :=
+  (MPfile $ List.rev path, label).    
+
 (** Pretty print a term to a string. *)  
 Definition pp_term (env : global_env) (ctx : context) (t : term) : string :=
   let decl_ident d : ident :=
@@ -59,6 +65,78 @@ Definition subterm (x t : term) : bool :=
   | tRel n => negb $ correct_noccur_between n 1 t
   | _ => false 
   end. 
+
+(** [reduce_head F env ctx t] reduces [t] until a head constructor appears.
+    I think this does weak head normalization but I'm not completely sure. *)
+Definition reduce_head `{F : Fuel} (env : global_env) (ctx : context) (t : term) : option term :=
+  match t with
+  | tLambda _ _ _ => Some t 
+  | tProd _ _ _ => Some t
+  | _ =>
+    match hnf_stack env ctx t with 
+    | Checked (f, args) => Some (mkApps f args) 
+    | _ => None
+    end
+  end.
+
+(** [kp_tFixM binder rec_arg_idx ty state body] makes a single fixpoint with the given parameters.
+    - [binder] is the [aname] for the fixpoint parameter.
+    - [rec_arg_idx] is the index of the (structurally) recursive argument, starting at [0].
+    - [ty] is the type of the fixpoint parameter.
+    - [body] is the body of the fixpoint, which has access to the extended state.
+      The body is not lifted.
+
+    For instance to build the fixpoint [fix add (n : nat) (m : nat) {struct m} : nat := ...]
+    one could use [kp_tFixM "add" 1 '(nat -> nat -> nat) st (fun add st -> ...)].
+*)
+Definition kp_tFixM {M : Type -> Type} {_ : Monad M} (binder : aname) (rec_arg_idx : nat) 
+  (ty : term) (st : state) (mk_body : ident -> state -> M term) : M term 
+:=
+  let id := fresh_ident None st in
+  let new_st := add_old_var id (mkdecl binder None ty) st in
+  mlet body <- mk_body id new_st ;;
+  let def := {| dname := binder ; dtype := ty ; dbody := body ; rarg := rec_arg_idx |} in
+  ret $ tFix [def] 0. 
+
+(** [binder_count] describes a number of binders. It is used e.g. by [prod_telescope]. *)
+Inductive binder_count :=
+  | Any                (* Any number of binders. *)
+  | AtMost (n : nat).  (* At most the given number of binders. *)
+
+(** [lt_count n c] checks if [n] is strictly smaller than the binder count [c] :
+      lt_count n Any = true
+      lt_count n (AtMost p) = (n < p) 
+*)
+Definition lt_count (n : nat) (c : binder_count) : bool :=
+  match c with 
+  | Any => true 
+  | AtMost p => n <? p
+  end.
+
+(** [prod_telescope count (forall x_1 : T_1, ..., forall x_n : T_n, body) state k]
+    adds a declaration [id_i : decl_i] in [state] for each [x_i],
+    and returns [k [id_1; ... ; id_n] body new_state].
+    
+    - [count] is the number of binders to peel off. 
+*)
+Definition prod_telescope {T} (count : binder_count) (t : term) (st : state) (k : list ident -> term -> state -> T) : T :=
+  let fix loop ids t st :=
+    if lt_count (List.length ids) count then 
+      match t with 
+      | tProd binder ty body => 
+        let id := fresh_ident None st in
+        loop (id :: ids) body (add_fresh_var id (mkdecl binder None ty) st)
+      | body => k (List.rev ids) body st
+      end
+    else k (List.rev ids) t st
+  in loop [] t st.
+    
+(** [instantiate_prod x (forall _, body)] returns [body] with [tRel 0] replaced by [x]. *)
+Definition instantiate_prod (x : term) (t : term) : term :=
+  match t with 
+  | tProd _ _ body => subst0 [x] body
+  | _ => t
+  end.
 
 (****************************************************************************)
 (** Lifting mapping functions. *)
@@ -120,17 +198,95 @@ Definition sequence (rs : list rule) : rule :=
   
 (** Fixpoints for rules. We are in Coq so we use a [fuel] argument to prevent infinite recursion. *)
 Fixpoint fix_rule `{fuel : Fuel} (f : rule -> rule) : rule := 
-  fun env state lp => 
+  fun env st lp => 
     match fuel with 
     | 0 => None 
-    | S fuel => f (@fix_rule fuel f) env state lp
+    | S fuel => f (@fix_rule fuel f) env st lp
     end.
 
+(** [detruct_map f] checks that [f] is a mapping function i.e. has type [forall (A B : Type), (A -> B) -> T A -> T B]
+    and returns [Some T] if it succeeds or [None] if it fails. 
+
+    Due to technical limitations (we don't have unification) we only handle 
+    the case where [T] is an inductive.
+*)
+Definition destruct_map env st (f : term) : option inductive := 
+  (* Get the type of the mapping function. *)
+  mlet f_type <- 
+    match infer env init_graph (get_typing_context st) f with
+    | Checked ty => Some ty
+    | TypeError _ => None
+    end
+  ;;
+  (* Check it has the right shape. *)
+  prod_telescope (AtMost 4) f_type st $ fun ids TB st =>
+    mlet (A, B, F, tA) <- 
+      match ids with 
+      | [ A ; B ; f ; tA ] => Some (A, B, f, tA)
+      | _ => None
+      end
+    ;;
+    (* Check the types of A, B and F. *) 
+    match reduce_to_sort env (get_typing_context st) (get_one_type A st), 
+          reduce_to_sort env (get_typing_context st) (get_one_type B st), 
+          reduce env (get_typing_context st) (get_one_type F st)
+    with
+    | Checked _, 
+      Checked _, 
+      Checked (tProd _ (tRel a) (tRel b)) =>
+      if (a == get_rel A st) && (b == 1 + get_rel B st) then 
+        (* Extract the inductive type from [TA] and [TB]. *)
+        let TA := get_one_type tA st in
+        match reduce env (get_typing_context st) TA, 
+              reduce env (get_typing_context st) TB 
+        with 
+        | Checked (tApp (tInd ind1 []) [tRel a]), 
+          Checked (tApp (tInd ind2 []) [tRel b]) =>
+           if (ind1 == ind2) && (a == get_rel A st) && (b == get_rel B st) then Some ind1 else None
+        | _, _ => None 
+        end
+      else None
+    | _, _, _ => None
+    end.
+
+Definition custom_rule (rec_rule : rule) (map_name : kername) : rule :=
+  fun env st lp =>
+    let () := print ("RULE custom ON", pp_term env (get_typing_context st) lp.(lp_T)) in
+    (* Extract the type former. *)
+    mlet tf_ind <- destruct_map env st (tConst map_name []) ;; 
+    (* Check [T =?= tf_ind ?alpha] and [U =?= tf_ind ?beta]. *)
+    match reduce_head env (get_typing_context st) lp.(lp_T), 
+          reduce_head env (get_typing_context st) lp.(lp_U) 
+    with 
+    | Some (tApp (tInd ind1 []) [alpha]), 
+      Some (tApp (tInd ind2 []) [beta ]) =>
+      if (ind1 == tf_ind) && (ind2 == tf_ind) then
+        (* Recurse to lift [f : A -> B] to [f' : alpha -> beta]. *)
+        let rec_lp := {| lp_A := lp.(lp_A) ; lp_B := lp.(lp_B) ; lp_f := lp.(lp_f) ; lp_T := alpha ; lp_U := beta |} in
+        let () := print ("Recursing on", pp_term env (get_typing_context st) alpha) in
+        match rec_rule env st rec_lp with 
+        | None => None 
+        | Some f' => 
+          (* Success ! All that is left is to lift [f' : alpha -> beta] to [T -> U]. *)
+          Some (mkApps (tConst map_name []) [alpha ; beta ; f'])
+        end
+      else None
+    | _, _ => None
+    end.
+    
 End Lift.
 
 (****************************************************************************)
 (** DeriveMap and AddMap commands. *)
 (****************************************************************************)
+
+(** The list of map functions. 
+    We use a constant list in this file because I didn't find a simple 
+    way to update it using an [AddMap] function. *)
+Definition name_db := 
+  [ mk_kername ["Coq" ; "Lists" ; "List"] "map" 
+  ; mk_kername ["Coq" ; "Init" ; "Datatypes"] "option_map"
+  ].
 
 (** A small record to hold the parameters of the mapping function while
     we build its body. *)
@@ -147,13 +303,17 @@ Definition build_arg env (state : state) (p : params) (arg : term) (arg_ty : ter
     (replace_rel (get_rel p.(A) state) (get_rel p.(B) state) arg_ty)
   in
   (* Build the lifting rule. *)
-  (*let map_rule : Lift.rule :=
-    fun env ctx lp =>
-      if check_conv env init_graph ctx lp.(Lift.lp_T) $ tApp (tInd p.(ind) []) [tRel p.(A)]
-      then Some $ tApp (tRel p.(map)) [tRel p.(A); tRel p.(B); tRel p.(f)]
+  let map_rule : Lift.rule :=
+    fun env st lp =>
+      if check_conv env init_graph (get_typing_context st) lp.(Lift.lp_T) $ tApp (tInd p.(ind) []) [tRel $ get_rel p.(A) st]
+      then Some $ tApp (tRel $ get_rel p.(map) st) [tRel $ get_rel p.(A) st; tRel $ get_rel p.(B) st; tRel $ get_rel p.(f) st]
       else None 
-  in*)
-  let rule := Lift.sequence $ Lift.apply_rule :: Lift.id_rule :: [] in
+  in
+  let rule := 
+    Lift.fix_rule $ fun rec_rule => 
+      Lift.sequence $ 
+        Lift.apply_rule :: Lift.id_rule :: map_rule :: List.map (Lift.custom_rule rec_rule) name_db 
+  in
   (* Solve the lifting problem. *)
   (* The use of [tmEval] is a hack to make [PrintEffect.print] actually print stuff. *)
   mlet res <- tmEval cbv (rule env state lp) ;;
@@ -166,37 +326,15 @@ Definition build_arg env (state : state) (p : params) (arg : term) (arg_ty : ter
     tmReturn $ tApp f' [arg]
   end.
 
-Print constructor_body.
-
-(** [prod_telescope (forall x_1 : T_1, ..., forall x_n : T_n, body) state k]
-    adds a declaration [id_i : decl_i] in [state] for each [x_i],
-    and returns [k [id_1; ... ; id_n] body new_state].
-    
-    This assumes [body] is not itself a product, i.e. it peels off the maximal number of products. *)
-Definition prod_telescope {T} (t : term) (st : state) (k : list ident -> term -> state -> T) : T :=
-  let fix loop ids t st :=
-    match t with 
-    | tProd binder ty body => 
-      let id := fresh_ident None st in
-      loop (id :: ids) body (add_fresh_var id (mkdecl binder None ty) st)
-    | body => k ids body st
-    end
-  in loop [] t st.
-
-(** [instantiate_prod x (forall _, body)] returns [body] with [tRel 0] replaced by [x]. *)
-Definition instantiate_prod (x : term) (t : term) : term :=
-  match t with 
-  | tProd _ _ body => subst0 [x] body
-  | _ => t
-  end.
-
 Definition build_branch env (st : state) (p : params) (ctor_idx : nat) (ctor : constructor_body) : TM (branch term) :=
   tmPrint "BRANCH" ;;
   let n := List.length ctor.(cstr_args) in
   (* Get the type of the constructor for parameter [A]. *)
-  let ctor_ty := instantiate_prod (tRel $ get_rel p.(A) st) ctor.(cstr_type) in
+  let ctor_ty := subst0 [tInd p.(ind) []] ctor.(cstr_type) in
+  let ctor_ty := instantiate_prod (tRel $ get_rel p.(A) st) ctor_ty in
+  tmPrint =<< tmEval cbv (pp_term env (get_typing_context st) ctor_ty) ;;
   (* Get access to the arguments. *)
-  prod_telescope ctor_ty st $ fun args _ st =>
+  prod_telescope Any ctor_ty st $ fun args _ st =>
     (* Process each argument individually. *)
     mlet mapped_args <-
       monad_map (fun arg => build_arg env st p (tRel $ get_rel arg st) (get_one_type arg st)) args
@@ -211,20 +349,21 @@ Definition build_map (env : global_env) (st : state) (ind : inductive) (ind_body
   mlet uA <- tmQuoteUniverse ;;
   mlet uB <- tmQuoteUniverse ;;
   (* Create the type of the mapping function. *)
-  (*mlet map_ty <-
+  let map_ty :=
     (kp_tProd {| binder_name := nNamed "A" ; binder_relevance := Relevant |} (tSort $ sType uA) None st $ fun A st =>
     kp_tProd {| binder_name := nNamed "B" ; binder_relevance := Relevant |} (tSort $ sType uB) None st $ fun B st =>
-    ret (mk_arrow 
+    mk_arrow 
       (mk_arrow (tRel $ get_rel A st) (tRel $ get_rel B st))
-      (mk_arrow (tApp (tInd ind []) [tRel $ get_rel A st]) (tApp (tInd ind []) [tRel $ get_rel B st]))))
-  ;;*)
+      (mk_arrow (tApp (tInd ind []) [tRel $ get_rel A st]) (tApp (tInd ind []) [tRel $ get_rel B st])))
+  in
   (* Abstract over the input parameters. *)
+  kp_tFixM {| binder_name := nNamed "map" ; binder_relevance := Relevant |} 3 map_ty st $ fun map st =>
   kp_tLambdaM {| binder_name := nNamed "A" ; binder_relevance := Relevant |} (tSort $ sType uA) st $ fun A st => 
   kp_tLambdaM {| binder_name := nNamed "B" ; binder_relevance := Relevant |} (tSort $ sType uB) st $ fun B st =>
   kp_tLambdaM {| binder_name := nNamed "f" ; binder_relevance := Relevant |} (mk_arrow (tRel $ get_rel A st) (tRel $ get_rel B st)) st $ fun f st =>
   kp_tLambdaM {| binder_name := nNamed "x" ; binder_relevance := Relevant |} (tApp (tInd ind []) [tRel $ get_rel A st]) st $ fun x st =>
   (* Gather the parameters. *)
-  let p := {| ind := ind ; map := "map#dummy" ; A := A ; B := B ; f := f ; x := x |} in
+  let p := {| ind := ind ; map := map ; A := A ; B := B ; f := f ; x := x |} in
   (* Construct the case information. *)
   let ci := {| ci_ind := ind ; ci_npar := 1 ; ci_relevance := Relevant |} in
   (* Construct the case predicate. *)
@@ -273,7 +412,7 @@ Definition derive_map (ind_name : qualid) : TM unit :=
      Take care to include the environment needed to type :
      - the given inductive [ind].
      - all the mapping functions in the database. *)
-  mlet env <- env_of_terms (tInd ind [] :: [] (*:: List.map (fun name => tConst name []) name_db*)) ;;
+  mlet env <- env_of_terms (tInd ind [] :: List.map (fun name => tConst name []) name_db) ;;
   (* Get the inductive body. *)
   mlet ind_body <-
     match lookup_inductive env ind with 
@@ -293,3 +432,9 @@ Definition derive_map (ind_name : qualid) : TM unit :=
   (* TODO : handle the case where [ind_name] contains dots '.' *)
   tmMkDefinition (ind_name ++ "_map")%bs func ;;
   tmReturn tt.
+
+Monomorphic Inductive myind A :=
+  | MyConstructor : option (option (list (option (list A)))) -> myind A.
+
+MetaCoq Run (derive_map "myind").
+Print myind_map.

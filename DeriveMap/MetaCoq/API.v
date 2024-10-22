@@ -743,7 +743,7 @@ Section mk_tFix.
   Definition mk_tFix : nat -> state -> (list ident -> nat -> one_inductive_body -> state -> term) -> term :=
     fun focus s tmc =>
     let cxt_fix := rev (mapi (fun pos_indb indb => mkdecl (fan pos_indb indb s) None (fty pos_indb indb s)) ind_bodies) in
-    let ' (id_fix, id_cxt_fix) := fresh_id_context (Some "Fix") s cxt_fix in
+    let '(id_fix, id_cxt_fix) := fresh_id_context (Some "Fix") s cxt_fix in
     let e_Fix := add_fresh_context id_cxt_fix s in
     tFix (mapi (fun pos_indb indb => mkdef _ (fan pos_indb indb s) (fty pos_indb indb s)
                     (tmc id_fix pos_indb indb e_Fix) (frarg pos_indb indb s)) ind_bodies) focus.
