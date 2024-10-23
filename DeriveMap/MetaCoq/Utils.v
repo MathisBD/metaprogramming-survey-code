@@ -12,7 +12,7 @@ Set Universe Polymorphism.
 (*******************************************************************************)
 
 (** [iterate n f x] applies [f] [n] times to [x]. *)
-Fixpoint iterate {A}  (n : nat) (f : A -> A) (x : A) : A :=
+Fixpoint iterate {A} (n : nat) (f : A -> A) (x : A) : A :=
   match n with 
   | 0 => x
   | S n => iterate n f (f x)

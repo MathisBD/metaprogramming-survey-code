@@ -14,9 +14,13 @@ API vs Locally Nameless : context management.
   opening a binder in (t1 = tProd _ A B) is OK : simply add a declaration for A in C1.
   !! but now you can't use A in t2 or t3 !!
 
-Lean: building fixpoints (/let-rec) in Expr directly 
+Lean: building fixpoints (or let-rec) in Expr directly 
   -> lookup "predef"
   -> ask Mario if needed
+
+MetaCoq: Interpreting the template monad in pure Coq :
+  - modifying the global env : ok (use a state monad)
+  - generating fresh universe variables (and thus instances)
 
 ### Bugs
 
