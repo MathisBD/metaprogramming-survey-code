@@ -2,7 +2,7 @@ DECLARE PLUGIN "coq-metaprogramming.derivefunctor.plugin"
 
 { 
   open Stdarg
-  module Derivefunctor = Derivefunctor_de_bruijn
+  module Derivefunctor = Derivefunctor_locally_nameless
 }
 
 
