@@ -1,5 +1,6 @@
 From DeriveMap.MetaCoq Require Import CommandDeBruijn.
 From MetaCoq.Utils Require Import utils.
+From MetaCoq.Template Require Import All.
 
 Inductive double A := 
   | Dnil : bool -> double A

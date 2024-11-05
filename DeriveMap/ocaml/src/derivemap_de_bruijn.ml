@@ -43,7 +43,7 @@ let prod env sigma (name : string) (ty : EConstr.t) (body : Environ.env -> Evd.e
   let sigma, body = body inner_env in
   (sigma, mkProd ({ binder_name; binder_relevance = ERelevance.relevant }, ty, body))
 
-(**  [fix env sigma name rec_arg_idx ty body] makes a single fixpoint with the given parameters.
+(** [fix env sigma name rec_arg_idx ty body] makes a single fixpoint with the given parameters.
     - [name] is the name of the fixpoint parameter.
     - [rec_arg_idx] is the index of the (structurally) recursive argument, starting at [0].
     - [ty] is the type of the fixpoint parameter.
