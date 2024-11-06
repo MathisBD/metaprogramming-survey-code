@@ -134,7 +134,6 @@ let derive (ind_name : Libnames.qualid) : unit =
   let sigma, constr_t = EConstr.fresh_global env sigma (ConstructRef constr_name) in
   let sigma, ind_t = EConstr.fresh_global env sigma (IndRef ind) in
   let inst = EConstr.mkApp (constr_t, [| ind_t; func |]) in
-  Log.printf "LOCALLY NAMELESS";
   (* Type-check to make sure everything went right. *)
   let sigma, inst_ty = Typing.type_of env sigma inst in
   (* Solve typeclasses. *)

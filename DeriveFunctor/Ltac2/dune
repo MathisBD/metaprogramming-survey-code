@@ -1,0 +1,4 @@
+(coq.theory
+ (name DeriveFunctor.Ltac2)
+ (package coq-metaprogramming)
+ (theories Ltac2 DeriveFunctor.Functor))

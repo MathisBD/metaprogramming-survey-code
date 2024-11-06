@@ -146,7 +146,6 @@ Ltac2 with_goal (f : unit -> 'a) : 'a :=
   (* Create a goal and focus it. *)
   Control.new_goal g ;
   Control.focus 1 1 f.
-  
 
 (**************************************************************************************)
 
