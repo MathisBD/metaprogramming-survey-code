@@ -6,11 +6,17 @@ open Lean Meta Elab
 /- Functor class. -/
 /- --------------------------------------------------------------------------------------/
 
-set_option pp.explicit true
-
 /-- `MyFunctor` is similar to `Functor` except that it doesnt have a `mapConst` method. -/
 class MyFunctor.{u, v} (F : Type u -> Type v) where
   fmap {α β : Type u} : (α → β) → F α → F β
+
+/-- The identity function is a functor. -/
+instance id_functor : MyFunctor (fun T => T) where
+  fmap f x := f x
+
+/-- Composition of functors is a functor. -/
+instance comp_functor [MyFunctor F] [MyFunctor G] : MyFunctor (fun T => G (F T)) where
+  fmap f x := MyFunctor.fmap (MyFunctor.fmap f) x
 
 /- --------------------------------------------------------------------------------------/
 /- Utilities. -/
@@ -68,7 +74,7 @@ def buildFunctor (ind : InductiveVal) : MetaM (List Name × Expr) := do
   -- Helper to apply the inductive to a parameter.
   let apply_ind param : MetaM Expr := do
     return Expr.app (← freshConstant $ .inductInfo ind) param
-  -- Create some universe level parameters.
+  -- Create a universe level parameter.
   let u := `u
   -- Declare the inputs of the function (add them to the local context).
   withLocalDecl `A BinderInfo.implicit (.sort $ .succ $ .param u) fun A => do
@@ -88,8 +94,10 @@ def buildFunctor (ind : InductiveVal) : MetaM (List Name × Expr) := do
     -- Bind the input parameters.
     let func ← mkLambdaFVars #[A, B, f, x] body
     -- Return the level parameters and the resulting instance.
-    --let inst ← mkAppM ``MyFunctor.mk #[func]
-    return ⟨[u], func⟩
+    let ind_t ← freshConstant (.inductInfo ind)
+    let mk_t ← freshConstant (← getConstInfo ``MyFunctor.mk)
+    let inst := mkAppN mk_t #[ind_t , func]
+    return ⟨[u], inst⟩
 
 /-- `#derive_functor` command entry point. -/
 def deriveFunctor (ind_name : Name) : MetaM Unit := do
@@ -107,7 +115,8 @@ def deriveFunctor (ind_name : Name) : MetaM Unit := do
   let defVal ←
     mkDefinitionValInferrringUnsafe
       inst_name lvls (← inferType inst) inst (ReducibilityHints.regular 0)
-  addDecl $ Declaration.defnDecl defVal
+  addAndCompile $ Declaration.defnDecl defVal
+  addGlobalInstance inst_name AttributeKind.global
   IO.println s!"Declared functor instance for `{ind_name} under the name `{inst_name}"
 
 /-- Derive a mapping function for an inductive.
@@ -115,29 +124,24 @@ def deriveFunctor (ind_name : Name) : MetaM Unit := do
 elab "#derive_functor" ind_name:name : command =>
   Command.liftTermElabM $ deriveFunctor ind_name.getName
 
-instance id_functor : MyFunctor (fun T => T) where
-  fmap f x := f x
-
-#derive_functor `Option
-
-#print Option.functor
-
 /- --------------------------------------------------------------------------------------/
 /- Examples. -/
 /- --------------------------------------------------------------------------------------/
 
---inductive Double (A : Type u) : Type u :=
---  | double : A -> A -> Double A
---
---#derive_map `Double
---#add_map `Double.map
---
---#print Double.map
---
---inductive Mylist (A : Type u) : Type u :=
---  | nil : Bool → Mylist A
---  | duh : A → A → Mylist A
---  | cons : A → List A → Bool → Double (List A) → Mylist A
---
---#add_map `List.map
---#derive_map `Mylist
+inductive Double (A : Type u) : Type u :=
+  | double : A -> A -> Double A
+
+#derive_functor `Double
+
+instance Double.functor' : MyFunctor Double where
+  fmap := Double.functor.fmap
+
+instance List.functor : MyFunctor List where
+  fmap := List.map
+
+inductive Mylist (A : Type u) : Type u :=
+  | nil : Bool → Mylist A
+  | duh : A → A → Mylist A
+  | cons : A → List A → Bool → List (Double A) → Mylist A
+
+#derive_functor `Mylist
