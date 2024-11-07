@@ -3,7 +3,7 @@
 From Coq Require List.
 From Ltac2 Require Import Ltac2 Printf Std.
 From DeriveFunctor.Ltac2 Require Import Utils.
-From DeriveFunctor Require Import Functor.
+From DeriveFunctor Require Export Functor.
  
 Ltac2 build_arg (a : ident) (b : ident) (f : ident) (arg : ident) () : unit :=
   let va := mk_var a in

@@ -1,21 +1,13 @@
 From DeriveFunctor.Elpi Require Import Command.
 
-Inductive double A := 
-  | Double : A -> A -> double A.
+Elpi DeriveFunctor list.
+Elpi DeriveFunctor option.
 
-Inductive tree A := 
-  | Leaf : A -> nat -> tree A
-  | Node : list (tree A) -> double A -> tree A -> tree A.
+Inductive tree A :=
+  | Leaf : A -> tree A
+  | Node : bool -> list (option (tree A)) -> tree A.
+Elpi DeriveFunctor tree.
 
-Inductive ind (A : Type) : Type :=
-  | Con : tree (ind A) -> ind A.
-
-(*Elpi DeriveMap double.
-Elpi AddMap (@double_map).
-Elpi DeriveMap list.
-Elpi AddMap (@list_map).
-Elpi DeriveMap tree.
-Elpi AddMap (@tree_map).
-Elpi DeriveMap ind.*)
-
-(*Eval cbv in @ind_map.*)
+Inductive tree2 A :=
+  | T : list (tree (option A)) -> tree2 A.
+Elpi DeriveFunctor tree2.

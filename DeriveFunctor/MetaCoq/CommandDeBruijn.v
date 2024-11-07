@@ -1,5 +1,5 @@
 From Coq Require Import List.
-From DeriveFunctor Require Import Functor.
+From DeriveFunctor Require Export Functor.
 From MetaCoq.Template Require Import All.
 From DeriveFunctor.MetaCoq Require Import Utils.
 From ReductionEffect Require Import PrintingEffect.
@@ -154,4 +154,4 @@ Definition derive_functor {A} (raw_ind : A) : TM unit :=
   (*tmMkDefinition (ind_name ++ "_fmap") func ;;
   tmReturn tt.*)
 
-MetaCoq Run (derive_functor option).
+(*MetaCoq Run (derive_functor option).*)

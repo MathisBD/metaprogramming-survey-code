@@ -1,5 +1,4 @@
 From Ltac2 Require Import Ltac2.
-From DeriveFunctor.Functor Require Import Functor.
 From DeriveFunctor.Ltac2 Require Import Command.
 From Coq Require List.
 

@@ -1,4 +1,4 @@
-From DeriveFunctor.Functor Require Import Functor.
+From DeriveFunctor.Functor Require Export Functor.
 From elpi Require Import elpi.
 
 Elpi Command DeriveFunctor.
@@ -28,13 +28,10 @@ main [str IndName] :- std.do! [
 ].
 
 % ---------------------------------------------------------------------------------------
-
-pred build-fmap 
-  i:inductive,  % The inductive type (with parameters).
-  i:term,       % The type of the inductive parameter.
-  o:term.       % The map function we are building.
-
-% Build the fmap function.
+% [build-fmap ind param_ty func] builds the [fmap] function for inductive [ind]
+% and a parameter of type [param_ty].
+pred build-fmap i:inductive, i:term, o:term.      
+  
 build-fmap I PTy 
   {{ fix map (A B : lp:PTy) (f : A -> B) (x : lp:(FI A)) {struct x} : lp:(FI B) := 
        let _ := Build_Functor _ map in
@@ -59,17 +56,8 @@ build-fmap I PTy
 ]. 
 
 % ---------------------------------------------------------------------------------------
-
-pred build-branch 
-  i:inductive, % I the inductive type.
-  i:term, % A the value of the parameter we map *from*.
-  i:term, % B the value of the parameter we map *to*.
-  i:term, % f : A -> B the mapping function.
-  i:term, % The branch constructor (applied to the parameters).
-  i:term, % The return type of the constructor.
-  i:list term, % The arguments of the constructor (without the parameters).
-  i:list term, % The types of each arguments.
-  o:term. % The resulting branch.
+% [build-branch ind A B f ctor ctor_ret_ty args arg_tys res].
+pred build-branch i:inductive, i:term, i:term, i:term, i:term, i:term, i:list term, i:list term, o:term.
 
 build-branch I A B F CA _ Args ArgsTy Branch :- std.do! [
   % Decide for each arg whether we leave it as is, apply F or Map to it or if it can't be handled.
@@ -80,6 +68,8 @@ build-branch I A B F CA _ Args ArgsTy Branch :- std.do! [
   coq.mk-app CB MappedArgs Branch
 ].
 
+% ---------------------------------------------------------------------------------------
+% [build-arg A B f arg arg_ty res].
 pred build-arg i:term, i:term, i:term, i:term, i:term, o:term.
 
 % If A does not occur in ArgTy, there is nothing to do.
@@ -94,17 +84,3 @@ build-arg A B F Arg ArgTy Res :-
 
 }}.
 Elpi Typecheck.
-
-Elpi DeriveFunctor list.
-Elpi DeriveFunctor option.
-(*Instance : Functor list := { fmap := List.map }.
-Instance : Functor option := { fmap := option_map }.*)
-
-Inductive tree A :=
-  | Leaf : A -> tree A
-  | Node : bool -> list (option (tree A)) -> tree A.
-Elpi DeriveFunctor tree.
-
-Inductive tree2 A :=
-  | T : list (tree (option A)) -> tree2 A.
-Elpi DeriveFunctor tree2.
