@@ -14,7 +14,5 @@ Inductive tree2 A :=
   | T : list (tree (option A)) -> tree2 A.
 Instance tree2_functor : Functor tree2. derive_functor (). Defined.
 
-Print tree_functor.
-
 
  

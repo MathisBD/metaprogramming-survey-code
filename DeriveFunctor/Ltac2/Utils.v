@@ -25,9 +25,9 @@ Ltac2 mk_prod (bind : binder) (body : constr) : constr :=
 (** [my_intro basename] creates an identifier from [basename] which is 
     fresh in the current goal, introduces a variable using this identifier 
     and returns it. *)
-    Ltac2 my_intro (basename : string) : ident :=
-        let x := Fresh.in_goal (Option.get (Ident.of_string basename)) in 
-        Std.intro (Some x) None ; x.
+Ltac2 my_intro (basename : string) : ident :=
+  let x := Fresh.in_goal (Option.get (Ident.of_string basename)) in 
+  Std.intro (Some x) None ; x.
       
 (* [constructor_nargs ctr] returns the number of the arguments of [ctr],
    including parameters. *)

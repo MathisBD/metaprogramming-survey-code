@@ -1,30 +1,19 @@
 ### Questions
 
-Coq: weird typeclass errors, especially when using monads --> this is what made Louise quit MetaCoq.
-
-Coq: pretty printing library ? ==> reimplement a cleaner version of TemplateCoq/Pretty.v (which deals with indentation correctly).
-
-MetaCoq: Where are "open recursors" for [term] ?
-
-API vs Locally Nameless : context management.
-  if tracking several terms in a same context : C |- t1, C |- t2, C |- t3
-  opening a binder in (t1 = tProd _ A B) requires adding a declaration for A in C, and thus lifting t2 and t3
-
-  if tracking several terms in different contexes : C1 |- t1, C2 |- t2, C3 |- t3
-  opening a binder in (t1 = tProd _ A B) is OK : simply add a declaration for A in C1.
-  !! but now you can't use A in t2 or t3 !!
+MetaCoq: Where are "open recursors" for [term] ? Should I add them ?
 
 Lean: building fixpoints (or let-rec) in Expr directly 
   -> lookup "predef"
   -> ask Mario if needed
 
-MetaCoq: Interpreting the template monad in pure Coq :
-  - modifying the global env : ok (use a state monad)
-  - generating fresh universe variables (and thus instances)
+### Nice metaprogramming features
 
-### Bugs
-
-- MetaCoq : noccur_between is incorrect. In the tRel case it should be || instead of &&.
+relevance indicated by number of (+).
+- good binder representation +++
+- unification ++
+- quoting/unquoting ++
+- tactics +
+- nice state management +
 
 ### Thoughts on the languages
 

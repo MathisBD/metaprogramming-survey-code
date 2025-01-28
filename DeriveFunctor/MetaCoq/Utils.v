@@ -138,8 +138,6 @@ Definition mk_fix {M : Type -> Type} {_ : Monad M} (ctx : context)
   mlet body <- mk_body (decl :: ctx) ;;
   let def := {| dname := aname ; dtype := ty ; dbody := body ; rarg := rec_arg_idx |} in
   ret $ tFix [def] 0. 
-(* TODO show to Yannick : removing [0] in the last line gives a cryptic error message.
-   This happens all the time when using monads in Coq. *)
 
 (** [mk_kername path label] returns the kernel name with given directory path and label.
     For instance [mk_kername ["Coq" ; "Init" ; "Datatypes"] "nat"] builds the kername

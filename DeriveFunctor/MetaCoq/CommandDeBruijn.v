@@ -6,9 +6,9 @@ From ReductionEffect Require Import PrintingEffect.
 Import ListNotations MCMonadNotation.
 Open Scope bs.
 
-(****************************************************************************)
-(** DeriveMap command. *)
-(****************************************************************************)
+(** Quote some terms we will need later. *)
+MetaCoq Quote Definition quoted_fmap := (@Functor.fmap).
+MetaCoq Quote Definition quoted_Build_Functor := (@Build_Functor).
 
 (** A small record to hold the inputs of the [fmap] function while
     we build its body. *)
@@ -17,8 +17,6 @@ Record inputs := mk_inputs { fmap : nat ; A : nat ; B : nat ; f : nat ; x : nat 
 (** [lift_inputs n inp] lifts the inputs [inp] under [n] binders. *)
 Definition lift_inputs (n : nat) (inp : inputs) : inputs :=
   {| fmap := inp.(fmap) + n ; A := inp.(A) + n ; B := inp.(B) + n ; f := inp.(f) + n ; x := inp.(x) + n |}.
-
-MetaCoq Quote Definition quoted_fmap := (@Functor.fmap).
 
 (** [fresh_evar ctx] creates a fresh evar in context [ctx]. *)
 Definition fresh_evar (ctx : context) : term :=
@@ -81,6 +79,9 @@ Definition build_fmap (ctx : context) (ind : inductive) (ind_body : one_inductiv
   mk_lambda ctx "B" (tSort $ sType fresh_universe) $ fun ctx =>
   mk_lambda ctx "f" (mk_arrow (tRel 1) (tRel 0)) $ fun ctx =>
   mk_lambda ctx "x" (tApp (tInd ind []) [tRel 2]) $ fun ctx =>
+  (* Build the recursive instance. *)
+  let rec_inst := mkApps quoted_Build_Functor []
+  mk_letin ctx "rec_inst" (fresh_evar ctx) rec_inst_def $ fun ctx =>
   (* Gather the parameters. *)
   let inp := {| fmap := 4 ; A := 3 ; B := 2 ; f := 1 ; x := 0 |} in
   (* Construct the case information. *)
@@ -96,29 +97,6 @@ Definition build_fmap (ctx : context) (ind : inductive) (ind_body : one_inductiv
   let branches := mapi (build_branch ctx ind inp) ind_body.(ind_ctors) in
   (* Finally make the case expression. *)
   tCase ci pred (tRel inp.(x)) branches.
-
-MetaCoq Quote Definition quoted_Build_Functor := (@Build_Functor).
-
-(* [env_of_term ts] returns the global environment needed to type the terms in [ts]. 
-
-   This function is maybe slower than it should be (I use [merge_global_envs] a lot).
-   If performance becomes an issue you can try calling [tmQuoteRec] only once,
-   on the list of unquoted terms. I tried this approach but failed to deal
-   with the dependent typing and universe issues it caused (all the terms in [ts] might
-   have different types).
-*)
-(*Fixpoint env_of_terms (ts : list term) : TM global_env :=
-  match ts with 
-  | [] => tmReturn empty_global_env
-  | t :: ts =>
-    (* Get the environment for [t]. *)
-    mlet t <- tmUnquote t ;;
-    mlet (t_env, _) <- tmQuoteRec (my_projT2 t) ;;
-    (* Get the environment for [ts]. *)
-    mlet ts_env <- env_of_terms ts ;;
-    (* Merge both envs. *)
-    tmReturn (merge_global_envs t_env ts_env)
-  end.*)
 
 (** DeriveFunctor command entry point. *)
 Definition derive_functor {A} (raw_ind : A) : TM unit := 
@@ -148,10 +126,26 @@ Definition derive_functor {A} (raw_ind : A) : TM unit :=
   let func := build_fmap [] ind ind_body in
   (* Build the functor instance. *)
   let inst := mkApps quoted_Build_Functor [tInd ind [] ; func] in
-  tmPrint =<< tmEval cbv inst.
-  (* Add the mapping function to the global environment. *)
-  (* TODO : handle the case where [ind_name] contains dots '.' *)
-  (*tmMkDefinition (ind_name ++ "_fmap") func ;;
-  tmReturn tt.*)
+  (* Unquote to solve evars (and resolve typeclasses). *)
+  mlet fctor <- tmUnquoteTyped (Type -> Type) (tInd ind []) ;;
+  mlet inst <- tmUnquoteTyped (Functor fctor) inst ;;
+  (* Declare the instance. *)
+  let inst_name := ind_body.(ind_name) ++ "_functor" in
+  tmMkDefinition inst_name =<< tmQuote inst ;;
+  mlet inst_ref <- tmLocate1 inst_name ;;
+  tmExistingInstance export inst_ref.
 
-(*MetaCoq Run (derive_functor option).*)
+Unset MetaCoq Strict Unquote Universe Mode.
+MetaCoq Run (derive_functor option).
+MetaCoq Run (derive_functor list).
+
+
+
+Inductive tree A :=
+  | Leaf : A -> tree A
+  | Node : bool -> list (option (tree A)) -> tree A.
+Instance tree_functor : Functor tree. derive_functor (). Defined.
+
+Inductive tree2 A :=
+  | T : list (tree (option A)) -> tree2 A.
+Instance tree2_functor : Functor tree2. derive_functor (). Defined.

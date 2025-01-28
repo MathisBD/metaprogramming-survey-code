@@ -72,5 +72,9 @@ _opam/
 
 # End of https://www.toptal.com/developers/gitignore/api/ocaml,coq
 
-# Lean 4
+### Lean 4 ###
 /.lake
+
+### Agda ###
+*.agdai
+/agda-stdlib-2.2

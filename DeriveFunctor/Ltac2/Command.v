@@ -69,7 +69,7 @@ Ltac2 fresh_evar (ty : constr) : evar :=
   let ev := 
     match Constr.Unsafe.kind ev_term with  
     | Constr.Unsafe.Evar ev _ => ev 
-    | _ => tactic_fail "copy_goal_evar"
+    | _ => tactic_fail "fresh_evar"
     end
   in 
   (* Set the type of the evar. *)
