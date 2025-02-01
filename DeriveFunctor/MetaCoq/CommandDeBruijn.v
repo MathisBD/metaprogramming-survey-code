@@ -139,8 +139,6 @@ Unset MetaCoq Strict Unquote Universe Mode.
 MetaCoq Run (derive_functor option).
 MetaCoq Run (derive_functor list).
 
-
-
 Inductive tree A :=
   | Leaf : A -> tree A
   | Node : bool -> list (option (tree A)) -> tree A.

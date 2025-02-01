@@ -1,2 +1,5 @@
-depend: standard-library
+depend: 
+  standard-library
+  standard-library-classes
 include: DeriveFunctor/Agda
+flags: -v 10
