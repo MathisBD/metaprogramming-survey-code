@@ -1,22 +1,25 @@
 module Test where
 
-open import Data.Unit
+open import Agda.Primitive using (Setω)
 open import Data.Bool
-open import Data.Maybe hiding (_>>=_)
+open import Data.Maybe
 open import Data.List
-open import Data.Nat
+open import Data.Product
 open import Function.Base
-open import Agda.Builtin.Sigma
-open import Agda.Builtin.Reflection
-open import Reflection
-open import Agda.Primitive
+open import Class.Functor
 
-macro
-  test : Term -> TC ⊤
-  test hole =
-    inContext (("A" , vArg (agda-sort $ Sort.set $ var 0 [])) ∷ ("a" , vArg (quoteTerm Level)) ∷ []) do
-      let t : Term
-          t = con (quote just) (hArg (var 1 []) ∷ hArg (var 0 []) ∷ [])
-      --inferType t
-      unify hole (quoteTerm tt)
-    
+instance 
+  functor-id : Functor (\{l} (T : Set l) -> T)
+  functor-id = record { _<$>_ = \f x -> f x }
+{-# INCOHERENT functor-id #-}
+
+instance 
+  functor-comp : {F G : ∀ {l} -> Set l -> Set l} -> {{Functor F}} -> {{Functor G}} -> Functor (\{l} T -> G (F T))
+  functor-comp {F} {G} {{hF}} {{hG}} = record { _<$>_ = \f x -> fmap {G} {{hG}} (fmap {F} {{hF}} f) x }
+{-# OVERLAPPABLE functor-comp #-}
+
+itω : {A : Setω} → {{A}} → A
+itω {{x}} = x
+
+_ : Functor (\{l} T -> Maybe (List (Maybe T)))
+_ = itω

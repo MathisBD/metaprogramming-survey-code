@@ -10,6 +10,7 @@ open import Data.String as String hiding (_++_)
 open import Data.List as List
 open import Data.Product
 open import Agda.Builtin.Sigma
+open import Agda.Primitive using (Setω)
 open import Relation.Binary.PropositionalEquality as Eq hiding ([_])
 open import Function.Base
 open import Agda.Builtin.Reflection
@@ -18,6 +19,24 @@ open import Reflection.AST.AlphaEquality using (_=α=_)
 open import Reflection.AST.DeBruijn using (weaken; _∈FV_)
 open import Class.Functor
 open import Class.Monad
+
+Set↑ : Setω
+Set↑ = {l : Level} → Set l -> Set l
+
+-- The identify function on types [\T -> T] is a functor.
+-- For some obscure reason I have to mark this instance as incoherent to avoid 
+-- problems with overlapping instances.
+instance 
+  functor-id : Functor (\{l} (T : Set l) -> T)
+  functor-id = record { _<$>_ = \f x -> f x }
+{-# INCOHERENT functor-id #-}
+
+-- Composition of two functors is a functor.
+-- This instance easily causes overlapping typeclass instances, hence the use of a pragma. 
+instance 
+  functor-comp : {F G : Set↑} -> {{Functor F}} -> {{Functor G}} -> Functor (\{l} T -> G (F T))
+  functor-comp {F} {G} {{hF}} {{hG}} = record { _<$>_ = \f x -> fmap {G} {{hG}} (fmap {F} {{hF}} f) x }
+{-# OVERLAPPABLE functor-comp #-}
 
 -- Print a message from the TC monad.
 -- Error parts are concatenated and a newline is automatically added at the end.
@@ -50,21 +69,14 @@ pi-telescope t = ([] , t)
 -- Map [f] over an argument with index [i] and type [arg-ty].
 build-arg : Inputs -> Name -> ℕ -> Arg Type -> TC (Arg Term)
 build-arg inp ind i (arg info arg-ty) =
-  if arg-ty =α= var (Inputs.A inp) [] then
-    -- Simply apply [f].
-    (printTC [ strErr "- apply f" ] >> 
-    return (arg info $ var (Inputs.f inp) [ vArg $ var i [] ]))
+  if (Inputs.A inp) ∈FV arg-ty then 
+    -- Apply [my-fmap f].
+    (let new-arg = def (quote fmap) (vArg (var (Inputs.f inp) []) ∷ vArg (var i []) ∷ []) in
+    return (arg info new-arg))
   else
     -- Return the argument unchanged.
-    (printTC (strErr "arg-ty :" ∷ termErr arg-ty ∷ []) >>
-    printTC [ strErr "- don't apply f" ] >> 
-    return (arg info $ var i []))
+    return (arg info $ var i [])
   
-  
-  --else 
-  --  -- We don't support other cases yet.
-  --  typeError [ strErr "build-arg: unsupported argument type" ]
-
 build-clause : Name -> Name -> TC Clause
 build-clause ind ctor = do
   printTC (strErr "build-clause for " ∷ nameErr ctor ∷ [])
@@ -129,9 +141,32 @@ build-fmap-ty ind =
              
 derive-functor : Name -> Name -> TC ⊤
 derive-functor fmap ind = do
+  -- Build fmap's type and declare it.
   declareDef (vArg fmap) (build-fmap-ty ind)
+  -- Build fmap's clauses and define it.
   clauses <- build-fmap ind
   defineFun fmap clauses
+  -- Check there are no remaining typeclass constraints.
+  noConstraints solveInstanceConstraints
+ 
+data Test {l} (A : Set l) : Set l where
+  test0 : Bool -> Test A
+  test1 : A -> Bool × ℕ -> A -> Test A
+  test2 : List (Maybe A) -> Test A
 
-unquoteDecl maybe-fmap = derive-functor maybe-fmap (quote Maybe)
+unquoteDecl test-fmap = derive-functor test-fmap (quote Test)
+instance
+  functor-test : Functor Test
+  functor-test = record { _<$>_ = test-fmap }
+
+data Tree {l : Level} (A : Set l) : Set l where
+  leaf : Tree A
+  node : Bool -> A -> Maybe (Test A) -> Tree A
+
+unquoteDecl tree-fmap = derive-functor tree-fmap (quote Tree)
    
+--itω : {A : Setω} → {{A}} → A
+--itω {{x}} = x
+--
+--_ : MyFunctor (Maybe ∘ Maybe)
+--_ = itω
