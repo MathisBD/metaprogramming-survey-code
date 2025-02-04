@@ -13,15 +13,24 @@ open import Agda.Builtin.Sigma
 open import Agda.Primitive using (Setω)
 open import Relation.Binary.PropositionalEquality as Eq hiding ([_])
 open import Function.Base
+open import Function.Identity.Effectful using () renaming (applicative to id-applicative)
+
 open import Agda.Builtin.Reflection
 open import Reflection hiding (_>>=_; _>>_)
 open import Reflection.AST.AlphaEquality using (_=α=_)
 open import Reflection.AST.DeBruijn using (weaken; _∈FV_)
+import Reflection.AST.Traversal as Traversal
+open import Reflection.AST.Term hiding (Telescope)
+open import Reflection.AST.Argument as Arg
+
 open import Class.Functor
 open import Class.Monad
 
 Set↑ : Setω
 Set↑ = {l : Level} → Set l -> Set l
+
+itω : (A : Setω) -> {{A}} -> A
+itω A {{x}} = x
 
 -- The identify function on types [\T -> T] is a functor.
 -- For some obscure reason I have to mark this instance as incoherent to avoid 
@@ -36,7 +45,7 @@ instance
 instance 
   functor-comp : {F G : Set↑} -> {{Functor F}} -> {{Functor G}} -> Functor (\{l} T -> G (F T))
   functor-comp {F} {G} {{hF}} {{hG}} = record { _<$>_ = \f x -> fmap {G} {{hG}} (fmap {F} {{hF}} f) x }
-{-# OVERLAPPABLE functor-comp #-}
+{-# OVERLAPS functor-comp #-}
 
 -- Print a message from the TC monad.
 -- Error parts are concatenated and a newline is automatically added at the end.
@@ -57,6 +66,16 @@ lift-inputs n inp =
          ; B = n + Inputs.B inp 
          ; f = n + Inputs.f inp }
 
+-- [simple-subst i j t] replaces every occurence of [var i] by [var j] in term [t].
+-- Variables other than [i] are left untouched.
+simple-subst : ℕ -> ℕ -> Term -> Term
+simple-subst i j t =
+  let actions = 
+        record (Traversal.defaultActions id-applicative) 
+          { onVar = \ctx i' -> if i ≡ᵇ i' then j else i' } 
+  in
+  Traversal.traverseTerm id-applicative actions (record { len = 0 ; context = [] }) t
+
 -- [pi-telescope t] peels off all the outer products of term [t],
 -- and returns the telescope of domains along with the final codomain
 -- (which is guaranteed to not be itself a product).
@@ -66,28 +85,46 @@ pi-telescope (pi a (abs na b)) =
   ((na , a) ∷ tele , t)
 pi-telescope t = ([] , t)
 
+-- [get-functor-instance ty] computes an instance for [Functor ty].
+get-functor-instance : Type -> TC Term
+get-functor-instance ty = 
+  let f-ty = def (quote Functor) [ vArg ty ] in
+  catchTC 
+    (checkType (def (quote itω) [ vArg f-ty ]) f-ty)
+    (typeError (strErr "No instance found for " ∷ termErr f-ty ∷ []))
+
 -- Map [f] over an argument with index [i] and type [arg-ty].
 build-arg : Inputs -> Name -> ℕ -> Arg Type -> TC (Arg Term)
-build-arg inp ind i (arg info arg-ty) =
-  if (Inputs.A inp) ∈FV arg-ty then 
-    -- Apply [my-fmap f].
-    (let new-arg = def (quote fmap) (vArg (var (Inputs.f inp) []) ∷ vArg (var i []) ∷ []) in
-    return (arg info new-arg))
-  else
-    -- Return the argument unchanged.
-    return (arg info $ var i [])
+build-arg inp ind i (arg info arg-ty) with (Inputs.A inp) ∈FV arg-ty
+... | true = do
+  -- Find the correct [Functor] instance for the argument type.
+  -- [arg-ty] should only depend on [a] and [A] (not on the previous arguments).
+  let F-body = simple-subst (Inputs.a inp) 1 $ simple-subst (Inputs.A inp) 0 arg-ty
+      F = hLam "a" $ vLam "A" F-body
+  F <- checkType F (hΠ[ "a" ∶ quoteTerm Level ] (vΠ[ "A" ∶ agda-sort (Sort.set $ var 0 []) ] unknown))
+  inst <- get-functor-instance F
+  -- Apply [fmap f] to the argument, with the correct instance.
+  let new-arg = def (quote fmap) 
+                  ( iArg inst 
+                  ∷ vArg (var (Inputs.f inp) []) 
+                  ∷ vArg (var i []) 
+                  ∷ [])
+  return (arg info new-arg)
+... | false = do
+  -- Return the argument unchanged.
+  return (arg info $ var i [])
   
 build-clause : Name -> Name -> TC Clause
 build-clause ind ctor = do
   printTC (strErr "build-clause for " ∷ nameErr ctor ∷ [])
   -- Bind the input arguments.
-  let inp = record { a = 4 ; b = 3 ; A = 2 ; B = 1 ; f = 0 }
+  let inp = record { a = 4 ; A = 3 ; b = 2 ; B = 1 ; f = 0 }
       inp-tele = 
         ("a" , hArg (quoteTerm Level)) ∷
+        ("A" , hArg (agda-sort $ Sort.set $ var 0 [])) ∷
         ("b" , hArg (quoteTerm Level)) ∷
-        ("A" , hArg (agda-sort $ Sort.set $ var 1 [])) ∷
-        ("B" , hArg (agda-sort $ Sort.set $ var 1 [])) ∷
-        ("f" , vArg (pi (vArg $ var 1 []) $ abs "_" $ var 1 [])) ∷
+        ("B" , hArg (agda-sort $ Sort.set $ var 0 [])) ∷
+        ("f" , vArg (pi (vArg $ var 2 []) $ abs "_" $ var 1 [])) ∷
         []
   inContext (List.reverse inp-tele) $ do
     -- Fetch the type of the constructor at parameter [A].
@@ -99,7 +136,7 @@ build-clause ind ctor = do
       let inp = lift-inputs n-args inp
       -- Transform each argument as needed.
       mapped-args <- 
-        mapM (\(i , (_ , ty)) -> build-arg inp ind i $ fmap (weaken (i + 1)) ty)  
+        mapM (\(i , (_ , ty)) -> build-arg inp ind i $ Arg.map (weaken (i + 1)) ty)  
           (List.zip (downFrom n-args) args-tele)
       -- Build the clause.
       let args-patt = 
@@ -109,8 +146,8 @@ build-clause ind ctor = do
               (downFrom n-args)
           patt = 
             hArg (Pattern.var $ Inputs.a inp) ∷
-            hArg (Pattern.var $ Inputs.b inp) ∷
             hArg (Pattern.var $ Inputs.A inp) ∷
+            hArg (Pattern.var $ Inputs.b inp) ∷
             hArg (Pattern.var $ Inputs.B inp) ∷
             vArg (Pattern.var $ Inputs.f inp) ∷
             vArg (Pattern.con ctor args-patt) ∷
@@ -132,11 +169,11 @@ build-fmap ind = do
 build-fmap-ty : Name -> Type
 build-fmap-ty ind =
   pi (hArg $ quoteTerm Level) $ abs "a" $ 
+  pi (hArg $ agda-sort $ Sort.set $ var 0 []) $ abs "A" $ 
   pi (hArg $ quoteTerm Level) $ abs "b" $ 
-  pi (hArg $ agda-sort $ Sort.set $ var 1 []) $ abs "A" $ 
-  pi (hArg $ agda-sort $ Sort.set $ var 1 []) $ abs "B" $ 
-  pi (vArg $ pi (vArg $ var 1 []) (abs "_" $ var 1 [])) $ abs "f" $
-  pi (vArg $ def ind [ vArg $ var 2 [] ]) $ abs "_" $
+  pi (hArg $ agda-sort $ Sort.set $ var 0 []) $ abs "B" $ 
+  pi (vArg $ pi (vArg $ var 2 []) (abs "_" $ var 1 [])) $ abs "f" $
+  pi (vArg $ def ind [ vArg $ var 3 [] ]) $ abs "_" $
   def ind [ vArg $ var 2 [] ]
              
 derive-functor : Name -> Name -> TC ⊤

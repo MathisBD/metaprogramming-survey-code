@@ -7,19 +7,18 @@ open import Data.List
 open import Data.Product
 open import Function.Base
 open import Class.Functor
+open import Agda.Builtin.Reflection
 
-instance 
-  functor-id : Functor (\{l} (T : Set l) -> T)
-  functor-id = record { _<$>_ = \f x -> f x }
-{-# INCOHERENT functor-id #-}
+data Tree {l} (A : Set l) : Set l where
+  leaf : Tree A
+--  node : Tree A -> A -> Tree A -> Tree A
+--
+--fmap-tree : ∀ {a b} -> {A : Set a} -> {B : Set b} -> (A -> B) -> Tree A -> Tree B
+--fmap-tree f leaf = leaf
+--fmap-tree f (node l x r) = 
+--  let rec-inst : Functor Tree
+--      rec-inst = record { _<$>_ = fmap-tree }
+--  in   
+--  node (fmap f l) (f x) (fmap f r)
 
-instance 
-  functor-comp : {F G : ∀ {l} -> Set l -> Set l} -> {{Functor F}} -> {{Functor G}} -> Functor (\{l} T -> G (F T))
-  functor-comp {F} {G} {{hF}} {{hG}} = record { _<$>_ = \f x -> fmap {G} {{hG}} (fmap {F} {{hF}} f) x }
-{-# OVERLAPPABLE functor-comp #-}
 
-itω : {A : Setω} → {{A}} → A
-itω {{x}} = x
-
-_ : Functor (\{l} T -> Maybe (List (Maybe T)))
-_ = itω
