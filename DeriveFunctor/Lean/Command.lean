@@ -77,12 +77,12 @@ def buildFunctor (ind : InductiveVal) : MetaM (List Name × Expr) := do
   -- Create a universe level parameter.
   let u := `u
   -- Declare the inputs of the function (add them to the local context).
-  withLocalDecl `A BinderInfo.implicit (.sort $ .succ $ .param u) fun A => do
-  withLocalDecl `B BinderInfo.implicit (.sort $ .succ $ .param u) fun B => do
-  withLocalDecl `f BinderInfo.default  (← mkArrow A B)            fun f => do
-  withLocalDecl `x BinderInfo.default  (← apply_ind A)            fun x => do
+  withLocalDecl `A .implicit (.sort $ .succ $ .param u) fun A => do
+  withLocalDecl `B .implicit (.sort $ .succ $ .param u) fun B => do
+  withLocalDecl `f .default  (← mkArrow A B)            fun f => do
+  withLocalDecl `x .default  (← apply_ind A)            fun x => do
     -- Construct the match return type (as a function of the scrutinee x).
-    let ret_type := Expr.lam `_ (← apply_ind A) (← apply_ind B) BinderInfo.default
+    let ret_type := Expr.lam `_ (← apply_ind A) (← apply_ind B) .default
     -- Construct the match branches. Each branch is a lambda abstraction which
     -- takes as input the *non-parameter* arguments of the constructor.
     let branches ← ind.ctors.toArray.mapM fun ctr => do

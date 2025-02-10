@@ -22,6 +22,7 @@ open import Reflection.AST.DeBruijn using (weaken; _∈FV_)
 import Reflection.AST.Traversal as Traversal
 open import Reflection.AST.Term hiding (Telescope)
 open import Reflection.AST.Argument as Arg
+open import Reflection.AST.Show
 
 open import Class.Functor
 open import Class.Monad
@@ -52,24 +53,27 @@ instance
 printTC : List ErrorPart -> TC ⊤
 printTC parts = debugPrint "" 10 parts
 
--- A small record to hold the de Bruijn indices of the inputs of [fmap].
+-- A small record to hold the inputs of [fmap] while we build it.
 record Inputs : Set where
   field 
+    ind func : Name
     a b A B f : ℕ
 
 -- [lift-inputs n inp] adds [n] to all de Bruijn indices in the inputs [inp].
 lift-inputs : ℕ -> Inputs -> Inputs
 lift-inputs n inp = 
-  record { a = n + Inputs.a inp 
+  record { ind = Inputs.ind inp
+         ; func = Inputs.func inp
+         ; a = n + Inputs.a inp 
          ; b = n + Inputs.b inp 
          ; A = n + Inputs.A inp 
          ; B = n + Inputs.B inp 
          ; f = n + Inputs.f inp }
 
--- [simple-subst i j t] replaces every occurence of [var i] by [var j] in term [t].
+-- [rename-term i j t] replaces every occurence of [var i] by [var j] in term [t].
 -- Variables other than [i] are left untouched.
-simple-subst : ℕ -> ℕ -> Term -> Term
-simple-subst i j t =
+rename-term : ℕ -> ℕ -> Term -> Term
+rename-term i j t =
   let actions = 
         record (Traversal.defaultActions id-applicative) 
           { onVar = \ctx i' -> if i ≡ᵇ i' then j else i' } 
@@ -85,24 +89,50 @@ pi-telescope (pi a (abs na b)) =
   ((na , a) ∷ tele , t)
 pi-telescope t = ([] , t)
 
--- [get-functor-instance ty] computes an instance for [Functor ty].
-get-functor-instance : Type -> TC Term
-get-functor-instance ty = 
-  let f-ty = def (quote Functor) [ vArg ty ] in
-  catchTC 
-    (checkType (def (quote itω) [ vArg f-ty ]) f-ty)
-    (typeError (strErr "No instance found for " ∷ termErr f-ty ∷ []))
+-- A small helper function to get around the fact that we don't have substitution
+-- on `Term`s (and implementing it is tricky and overkill).
+apply-helper : ∀ {A B : Setω} -> (A -> B) -> A -> B
+apply-helper f x = f x
+
+-- [get-functor-instance inp ty] computes an instance for [Functor ty].
+get-functor-instance : Inputs -> Type -> TC Term
+get-functor-instance inp ty = do
+  -- Build the recursive `Functor` instance.
+  functor-def <- getDefinition (quote Functor)
+  functor-ctor <- case functor-def of \
+    { (record-type c _) -> return c
+    ; _ -> typeError [ strErr "get-functor-instance: expected a record type."]
+    }
+  let f-ty = def (quote Functor) [ vArg ty ] 
+      rec-inst-ty = def (quote Functor) [ vArg $ def (Inputs.ind inp) [] ]
+      rec-inst = con functor-ctor [ vArg $ def (Inputs.func inp) [] ]
+  checkType rec-inst rec-inst-ty
+  -- DIRTY HACK to use a local type-class instance:
+  -- 1. Add the local instance to the local context before calling type-class resolution,
+  --    but we can only add a local assumption (not a local definition).
+  -- 2. The previous step introduces `var 0` in place of the instance: we bind it using a lambda abstraction.
+  -- 3. Apply the lambda abstraction to the actual instance. This part too is dirty since we don't have
+  --    applications in the term grammar. Instead we have to go through an auxiliary function `apply-helper`.
+  let hack = extendContext "rec-inst" (iArg rec-inst-ty) $ do
+      -- 1. Invoke type-class resolution.
+      inst <- checkType (def (quote itω) [ vArg (weaken 1 f-ty) ]) (weaken 1 f-ty)
+      -- 2. Add a binder. 
+      let inst = vLam "rec-inst" inst
+      -- 3. Make the application.
+      return (def (quote apply-helper) (vArg inst ∷ vArg rec-inst ∷ []))
+  -- Throw an error if we could not find the type-class instance.
+  catchTC hack (typeError (strErr "No instance found for " ∷ termErr f-ty ∷ []))
 
 -- Map [f] over an argument with index [i] and type [arg-ty].
-build-arg : Inputs -> Name -> ℕ -> Arg Type -> TC (Arg Term)
-build-arg inp ind i (arg info arg-ty) with (Inputs.A inp) ∈FV arg-ty
+build-arg : Inputs -> ℕ -> Arg Type -> TC (Arg Term)
+build-arg inp i (arg info arg-ty) with (Inputs.A inp) ∈FV arg-ty
 ... | true = do
   -- Find the correct [Functor] instance for the argument type.
   -- [arg-ty] should only depend on [a] and [A] (not on the previous arguments).
-  let F-body = simple-subst (Inputs.a inp) 1 $ simple-subst (Inputs.A inp) 0 arg-ty
+  let F-body = rename-term (Inputs.a inp) 1 $ rename-term (Inputs.A inp) 0 arg-ty
       F = hLam "a" $ vLam "A" F-body
   F <- checkType F (hΠ[ "a" ∶ quoteTerm Level ] (vΠ[ "A" ∶ agda-sort (Sort.set $ var 0 []) ] unknown))
-  inst <- get-functor-instance F
+  inst <- get-functor-instance inp F
   -- Apply [fmap f] to the argument, with the correct instance.
   let new-arg = def (quote fmap) 
                   ( iArg inst 
@@ -114,11 +144,11 @@ build-arg inp ind i (arg info arg-ty) with (Inputs.A inp) ∈FV arg-ty
   -- Return the argument unchanged.
   return (arg info $ var i [])
   
-build-clause : Name -> Name -> TC Clause
-build-clause ind ctor = do
+build-clause : Name -> Name -> Name -> TC Clause
+build-clause ind func ctor = do
   printTC (strErr "build-clause for " ∷ nameErr ctor ∷ [])
   -- Bind the input arguments.
-  let inp = record { a = 4 ; A = 3 ; b = 2 ; B = 1 ; f = 0 }
+  let inp = record { ind = ind ; func = func ; a = 4 ; A = 3 ; b = 2 ; B = 1 ; f = 0 }
       inp-tele = 
         ("a" , hArg (quoteTerm Level)) ∷
         ("A" , hArg (agda-sort $ Sort.set $ var 0 [])) ∷
@@ -136,7 +166,7 @@ build-clause ind ctor = do
       let inp = lift-inputs n-args inp
       -- Transform each argument as needed.
       mapped-args <- 
-        mapM (\(i , (_ , ty)) -> build-arg inp ind i $ Arg.map (weaken (i + 1)) ty)  
+        mapM (\(i , (_ , ty)) -> build-arg inp i $ Arg.map (weaken (i + 1)) ty)  
           (List.zip (downFrom n-args) args-tele)
       -- Build the clause.
       let args-patt = 
@@ -154,17 +184,19 @@ build-clause ind ctor = do
             []
       let body = con ctor (hArg (var (Inputs.b inp) []) ∷ hArg (var (Inputs.B inp) []) ∷ mapped-args)
           clause = Clause.clause (inp-tele ++ args-tele) patt body
+      printTC [ strErr (showClause clause) ]
       return clause
   
-build-fmap : Name -> TC (List Clause)
-build-fmap ind = do
+build-fmap : Name -> Name -> TC (List Clause)
+build-fmap ind func = do
   ind-def <- getDefinition ind
   ctors <- 
     case ind-def of \
     { (data-type npars ctors) -> return ctors
     ; _ -> typeError $ strErr "The constant" ∷ nameErr ind ∷ strErr "is not a data-type." ∷ []   
     }
-  mapM (build-clause ind) ctors
+  mapM (build-clause ind func) ctors
+
   
 build-fmap-ty : Name -> Type
 build-fmap-ty ind =
@@ -177,33 +209,29 @@ build-fmap-ty ind =
   def ind [ vArg $ var 2 [] ]
              
 derive-functor : Name -> Name -> TC ⊤
-derive-functor fmap ind = do
+derive-functor ind func = do
   -- Build fmap's type and declare it.
-  declareDef (vArg fmap) (build-fmap-ty ind)
+  declareDef (vArg func) (build-fmap-ty ind)
   -- Build fmap's clauses and define it.
-  clauses <- build-fmap ind
-  defineFun fmap clauses
+  clauses <- build-fmap ind func
+  defineFun func clauses
   -- Check there are no remaining typeclass constraints.
   noConstraints solveInstanceConstraints
  
 data Test {l} (A : Set l) : Set l where
   test0 : Bool -> Test A
   test1 : A -> Bool × ℕ -> A -> Test A
-  test2 : List (Maybe A) -> Test A
+  test2 : Test A -> Test A
 
-unquoteDecl test-fmap = derive-functor test-fmap (quote Test)
+{-# TERMINATING #-}
+unquoteDecl test-fmap = derive-functor (quote Test) test-fmap
 instance
   functor-test : Functor Test
   functor-test = record { _<$>_ = test-fmap }
 
 data Tree {l : Level} (A : Set l) : Set l where
   leaf : Tree A
-  node : Bool -> A -> Maybe (Test A) -> Tree A
+  node : Bool -> A -> List (Tree A) -> Tree (Maybe A) -> Tree A
 
-unquoteDecl tree-fmap = derive-functor tree-fmap (quote Tree)
-   
---itω : {A : Setω} → {{A}} → A
---itω {{x}} = x
---
---_ : MyFunctor (Maybe ∘ Maybe)
---_ = itω
+{-# TERMINATING #-}
+unquoteDecl tree-fmap = derive-functor (quote Tree) tree-fmap

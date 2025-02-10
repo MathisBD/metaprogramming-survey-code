@@ -9,8 +9,9 @@ open import Function.Base
 open import Class.Functor
 open import Agda.Builtin.Reflection
 
-data Tree {l} (A : Set l) : Set l where
-  leaf : Tree A
+
+--data Tree {l} (A : Set l) : Set l where
+--  leaf : Tree A
 --  node : Tree A -> A -> Tree A -> Tree A
 --
 --fmap-tree : ∀ {a b} -> {A : Set a} -> {B : Set b} -> (A -> B) -> Tree A -> Tree B
