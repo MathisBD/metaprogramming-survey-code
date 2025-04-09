@@ -1,4 +1,0 @@
-(coq.theory
- (name DeriveMap.Ltac2)
- (package coq-metaprogramming)
- (theories Ltac2))

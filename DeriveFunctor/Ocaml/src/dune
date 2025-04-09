@@ -1,9 +1,0 @@
-(library
- (name derivefunctor_plugin)
- (public_name coq-metaprogramming.derivefunctor.plugin)
- (libraries coq-core.plugins.ltac2 coq-core.tactics))
-
-; This will let Dune know about Coq's .mlg grammar files.
-
-(coq.pp
- (modules g_derivefunctor))

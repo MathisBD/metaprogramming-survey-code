@@ -1,5 +1,0 @@
-(coq.theory
- (name DeriveFunctor.OCaml)
- (package coq-metaprogramming)
- (theories DeriveFunctor.Functor)
- (plugins coq-metaprogramming.derivefunctor.plugin))

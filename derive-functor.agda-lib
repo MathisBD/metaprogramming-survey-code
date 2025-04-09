@@ -1,8 +1,0 @@
-depend: 
-  standard-library
-  standard-library-classes
-include: DeriveFunctor/Agda
-flags: 
-  -v 10
-  --backtracking-instance-search
-  --instance-search-depth=8

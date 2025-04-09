@@ -1,4 +1,0 @@
-(coq.theory
- (name DeriveFunctor.Elpi)
- (package coq-metaprogramming)
- (theories elpi elpi_elpi DeriveFunctor.Functor))

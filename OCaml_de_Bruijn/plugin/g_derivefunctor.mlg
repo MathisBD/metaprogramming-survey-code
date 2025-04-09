@@ -1,0 +1,10 @@
+DECLARE PLUGIN "derive-functor.plugin"
+
+{ 
+  open Stdarg
+}
+
+(* Declare the "DeriveFunctor" Coq command. *)
+VERNAC COMMAND EXTEND DeriveFunctor CLASSIFIED AS SIDEFF
+| [ "Derive" "Functor" "for" ref(ind_ref) ] -> { Derive_functor.derive ind_ref }
+END

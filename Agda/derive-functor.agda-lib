@@ -1,0 +1,7 @@
+depend: 
+  standard-library
+  standard-library-classes
+include: .
+flags: 
+  --backtracking-instance-search
+  --instance-search-depth=8

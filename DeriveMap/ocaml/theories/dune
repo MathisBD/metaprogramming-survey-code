@@ -1,4 +1,0 @@
-(coq.theory
- (name DeriveMap.OCaml)
- (package coq-metaprogramming)
- (plugins coq-metaprogramming.derivemap.plugin))
